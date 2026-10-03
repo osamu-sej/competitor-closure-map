@@ -1,0 +1,1 @@
+"""Snapshot data source adapters."""

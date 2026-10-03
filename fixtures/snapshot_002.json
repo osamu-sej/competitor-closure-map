@@ -1,0 +1,7 @@
+{
+  "observed_at": "2026-06-15T00:00:00Z",
+  "stores": [
+    {"name":"セブン-イレブン 相模原中央店","address":"神奈川県相模原市中央区中央1-1-1","lat":35.571,"lng":139.373,"prefecture":"神奈川県","city":"相模原市中央区","source":"fixture","source_store_id":"seven-a"},
+    {"name":"ファミリーマート 相模原中央二丁目店","address":"神奈川県相模原市中央区中央2-1-1","lat":35.571,"lng":139.37419,"prefecture":"神奈川県","city":"相模原市中央区","source":"fixture","source_store_id":"family-y"}
+  ]
+}
