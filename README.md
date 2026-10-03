@@ -4,6 +4,8 @@ FamilyMart 系・LAWSON 系の店舗スナップショットを時系列で比�
 
 fixture の店舗、住所、閉店根拠はすべて架空のデモデータです。実際の閉店情報として利用しないでください。
 
+Render に公開する場合は `render.yaml` の無料 Web Service 設定を使用します。DB のない公開版は `fixtures/demo_state.json` の架空データで起動します。
+
 ## アーキテクチャ
 
 - `collector/`: Python 3.9+。Fixture / CSV / OpenPOI アダプター、正規化、同一店舗照合、差分・状態遷移。実データの書き込みは PostgreSQL の単一トランザクションです。
@@ -24,6 +26,7 @@ npm run dev
 ```
 
 `http://localhost:3000` を開きます。fixture は `data/fixture-state.json` に生成されます。このファイルは Git の管理対象外です。`GET /api/health` はモードと最新の成功 snapshot を返します。
+ローカル生成ファイルがない場合は、Git 管理の `fixtures/demo_state.json` を読みます。
 
 デモでは Snapshot 001 に Seven A、45m 先の Lawson X、108m 先の FamilyMart Y が存在します。Snapshot 002 では Lawson X が消え、まず `MISSING` になります。その後、**架空の** evidence fixture を登録して `CLOSED_CONFIRMED` にした状態が UI に出ます。
 

@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: competitor-closure-map
+    runtime: node
+    plan: free
+    repo: https://github.com/osamu-sej/competitor-closure-map
+    branch: main
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.18.1
+      - key: DATA_MODE
+        value: fixture
+      - key: NEXT_PUBLIC_DATA_MODE
+        value: fixture

@@ -10,7 +10,11 @@ type State = {runs:Array<{status:string;finished_at:string}>;stores:Store[];obse
 
 async function fixtureState(): Promise<State> {
   const filename = path.resolve(process.cwd(), 'data/fixture-state.json');
-  return JSON.parse(await readFile(filename, 'utf8')) as State;
+  try {return JSON.parse(await readFile(filename, 'utf8')) as State;}
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    return JSON.parse(await readFile(path.resolve(process.cwd(), 'fixtures/demo_state.json'), 'utf8')) as State;
+  }
 }
 function parseNumber(v:unknown): number|null { return v == null ? null : Number(v); }
 function fixtureClosure(state:State, event:Record<string,unknown>):Closure {
