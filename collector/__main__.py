@@ -74,14 +74,26 @@ def main() -> None:
                 cursor.execute((ROOT / "supabase" / "migrations" / "202610040001_initial.sql").read_text(encoding="utf-8"))
         print(json.dumps({"status": "migrated"}))
         return
+    prefectures = PREFECTURES if args.command == "snapshot" and args.prefecture == "全国" else (args.prefecture,) if args.command == "snapshot" else ()
+    source = None
     try:
+        if args.command == "snapshot" and args.source == "openpoi":
+            keys = [f"{args.snapshot_key}:{prefecture}" if args.prefecture == "全国" else args.snapshot_key for prefecture in prefectures]
+            with connect(os.environ["DATABASE_URL"]) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("select count(*) from snapshot_runs where snapshot_key = any(%s) and status='succeeded'", (keys,))
+                    if cursor.fetchone()[0] == len(keys):
+                        print(json.dumps({"snapshot_key": args.snapshot_key, "status": "already_exists", "prefectures": len(keys)}, ensure_ascii=False))
+                        return
+            source = OpenPoiSource(cache_key=args.snapshot_key, cache_dir=ROOT / "data" / "openpoi-cache")
+            # Network collection must finish before the database write lock.
+            source.prime()
         with connect(os.environ["DATABASE_URL"]) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("select pg_advisory_xact_lock(481992)")
             state = load_state(connection)
             if args.command == "snapshot":
-                source = {"openpoi": lambda: OpenPoiSource(), "fixture": lambda: FixtureSource(args.file), "csv": lambda: CsvSource(args.file)}[args.source]()
-                prefectures = PREFECTURES if args.prefecture == "全国" else (args.prefecture,)
+                source = source or {"fixture": lambda: FixtureSource(args.file), "csv": lambda: CsvSource(args.file)}[args.source]()
                 observed_at = args.observed_at or utc_now()
                 runs = []
                 for index, prefecture in enumerate(prefectures, 1):

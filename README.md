@@ -43,6 +43,8 @@ python3 -m collector snapshot --source openpoi --prefecture 全国 --snapshot-ke
 
 `--snapshot-key` は冪等性キーです。同じキーの再実行は既存 snapshot を返します。都道府県名を指定するとその県だけ取り込みますが、OpenPOI の検索は日本全国のデータを一度取得してキャッシュし、その県を抽出します。毎週の完全比較には `全国` を指定してください。CSV と fixture の既定県は神奈川県です。
 
+OpenPOI の取得結果は、成功したブランドごとに `data/openpoi-cache/` へ同じ snapshot key で一時保存します。DB保存に失敗して再実行する場合、取得済みブランドは再ダウンロードしません。キャッシュは Git 管理対象外で、保存済み snapshot があれば DB 側の冪等性チェックを優先します。ネットワーク取得中は DB の書き込みロックを保持しません。
+
 公開Webに必要な変数は `DATA_MODE=database`、`NEXT_PUBLIC_DATA_MODE=database`、`DATABASE_URL` です。Render Blueprint は既存の `competitor-closure-map-db` から内部接続URLを参照します。GitHub Actions には同じDBの外部接続URLをリポジトリ Secret `DATABASE_URL` として登録します。ワークフローは `PGSSLMODE=require` で接続します。
 
 **Render Free Postgres は2026年11月3日に期限を迎え、バックアップもありません。継続運用には期限前に永続DBへ移行してください。** 無料枠では長期保存を保証できません。移行時は `pg_dump` / `pg_restore` で履歴ごと移し、RenderとGitHubの接続先を更新します。

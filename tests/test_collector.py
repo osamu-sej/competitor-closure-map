@@ -1,6 +1,7 @@
 import json
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from collector.engine import add_evidence, apply_snapshot, new_state, promotion_status, within_distance
@@ -83,6 +84,28 @@ class CollectorTests(unittest.TestCase):
         self.assertGreaterEqual(search.call_count,5)
         self.assertEqual(rows[0].licenses,['Apache-2.0'])
 
+    def test_openpoi_merges_nearby_duplicate_sources_with_provenance(self):
+        source=OpenPoiSource()
+        first={'name':'ローソン 横浜店','address':'','lat':35.4,'lng':139.4,'prefecture':'神奈川県','source':'overture','licenses':['Apache-2.0']}
+        second={**first,'address':'神奈川県横浜市中区1','lng':139.4001,'source':'jff','licenses':['CC-BY-4.0']}
+        with patch.object(source,'_partition',side_effect=[[first],[second]]):
+            rows=source.fetch_stores('神奈川県','LAWSON')
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0].address,second['address'])
+        self.assertEqual(len(rows[0].raw_payload['records']),2)
+        self.assertEqual(set(rows[0].licenses),{'Apache-2.0','CC-BY-4.0'})
+
+    def test_openpoi_retry_uses_complete_local_cache(self):
+        row=RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='openpoi')
+        with TemporaryDirectory() as directory:
+            first=OpenPoiSource(cache_key='week-1',cache_dir=Path(directory))
+            with patch.object(first,'_fetch_family',return_value=[row]) as fetch:
+                self.assertEqual(first.fetch_stores('神奈川県','LAWSON'),[row])
+                self.assertEqual(fetch.call_count,1)
+            retry=OpenPoiSource(cache_key='week-1',cache_dir=Path(directory))
+            with patch.object(retry,'_fetch_family',side_effect=AssertionError('network should not be used')):
+                self.assertEqual(retry.fetch_stores('神奈川県','LAWSON'),[row])
+
     def test_prefecture_snapshots_do_not_mark_other_prefectures_missing(self):
         kanagawa=[RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.6,prefecture='神奈川県')]
         tokyo=[RawStore('ローソン 新宿店','東京都新宿区1',35.7,139.7,prefecture='東京都')]
@@ -108,6 +131,17 @@ class CollectorTests(unittest.TestCase):
             apply_snapshot(state,GuardedSource(stores[:30]),'two','2026-10-08T00:00:00Z')
         self.assertEqual(len(state['runs']),1)
         self.assertEqual(len(state['events']),0)
+
+    def test_missing_seven_is_not_used_as_nearest(self):
+        near=RawStore('セブン-イレブン 近い店','神奈川県横浜市中区1',35.4,139.4)
+        far=RawStore('セブン-イレブン 遠い店','神奈川県横浜市中区2',35.4,139.402)
+        competitor=RawStore('ローソン 対象店','神奈川県横浜市中区3',35.4,139.4001)
+        state=new_state()
+        apply_snapshot(state,InlineSource([near,far,competitor]),'one','2026-10-01T00:00:00Z')
+        apply_snapshot(state,InlineSource([far]),'two','2026-10-08T00:00:00Z')
+        nearest=next(s for s in state['stores'] if s['id']==state['events'][0]['nearest_seven_store_id'])
+        self.assertEqual(nearest['canonical_name'],far.name)
+        self.assertEqual(next(s for s in state['stores'] if s['canonical_name']==near.name)['current_presence'],'MISSING')
 
 
 if __name__ == '__main__': unittest.main()

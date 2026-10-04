@@ -58,7 +58,7 @@ export default function MapPanel({items,selected,distance,onSelect}:{items:Closu
       instance=new Map({container:container.current,style:process.env.NEXT_PUBLIC_MAP_STYLE_URL||'https://tiles.openfreemap.org/styles/liberty',center:[137.5,37.0],zoom:4.5});
       map.current=instance;
       instance.addControl(new NavigationControl({showCompass:false}),'bottom-left');
-      instance.on('load',()=>setReady(true));
+      instance.on('load',()=>{instance?.fitBounds([[122,20],[154.5,46.1]],{padding:20,duration:0});setReady(true);});
       instance.on('error',(event)=>{if(String(event.error).includes('style')) setError('地図スタイルを取得できません。設定とネットワークを確認してください。');});
     }).catch(()=>setError('地図を読み込めません。'));
     return ()=>{disposed=true;markers.current.forEach(marker=>marker.remove());instance?.remove();map.current=null;};

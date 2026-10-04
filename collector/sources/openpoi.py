@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
+from hashlib import sha256
+from pathlib import Path
 from urllib.parse import urlencode
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
@@ -29,12 +31,42 @@ class OpenPoiSource(StoreSource):
     require_nonempty_each_family = False
     guard_coverage = True
 
-    def __init__(self, base_url: str | None = None, limit: int = 200, max_depth: int = 12):
+    def __init__(self, base_url: str | None = None, limit: int = 200, max_depth: int = 12, cache_key: str | None = None, cache_dir: Path | None = None):
         self.base_url = (base_url or os.getenv("OPENPOI_BASE_URL", "https://api.openpoiapi.com")).rstrip("/")
         self.limit = limit
         self.max_depth = max_depth
         self.requests = 0
         self.cache: dict[str, list[RawStore]] = {}
+        self.cache_key = cache_key
+        self.cache_dir = cache_dir
+
+    def _cache_path(self, brand_family: str) -> Path | None:
+        if not self.cache_dir or not self.cache_key:
+            return None
+        digest = sha256(self.cache_key.encode()).hexdigest()[:20]
+        return self.cache_dir / f"{digest}-{brand_family}.json"
+
+    def _load_family(self, brand_family: str) -> list[RawStore]:
+        path = self._cache_path(brand_family)
+        if path and path.exists():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if payload.get("version") == 1 and payload.get("base_url") == self.base_url:
+                rows = [RawStore(**row) for row in payload["stores"]]
+                if rows:
+                    print(f"OpenPOI {brand_family}: {len(rows)} stores from local cache", flush=True)
+                    return rows
+        rows = self._fetch_family(brand_family)
+        if path:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(json.dumps({"version": 1, "base_url": self.base_url, "stores": [asdict(row) for row in rows]}, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(path)
+        return rows
+
+    def prime(self) -> None:
+        for brand_family in KEYWORDS:
+            if brand_family not in self.cache:
+                self.cache[brand_family] = self._load_family(brand_family)
 
     def _search(self, keyword: str, bbox: tuple[float, float, float, float]) -> list[dict]:
         query = urlencode({"q": keyword, "bbox": ",".join(map(str, bbox)), "limit": self.limit})
@@ -69,7 +101,7 @@ class OpenPoiSource(StoreSource):
         if prefecture not in PREFECTURES:
             raise ValueError(f"Unknown prefecture: {prefecture}")
         if brand_family not in self.cache:
-            self.cache[brand_family] = self._fetch_family(brand_family)
+            self.cache[brand_family] = self._load_family(brand_family)
         return [store for store in self.cache[brand_family] if store.prefecture == prefecture]
 
     def _fetch_family(self, brand_family: str) -> list[RawStore]:

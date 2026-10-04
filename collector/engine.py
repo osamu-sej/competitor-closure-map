@@ -54,7 +54,7 @@ def apply_snapshot(state: dict, source, snapshot_key: str, observed_at: str, mis
     source_run_ids = {r["id"] for r in state["runs"] if r["source"] == source_name and r["prefecture"] == prefecture and r["status"] == "succeeded"}
     prior_ids = {observation["store_id"] for observation in state["observations"] if observation["snapshot_run_id"] in source_run_ids}
     observed_ids: set[str] = set()
-    counts = {"fetched": len(fetched), "families": family_counts, "requests": getattr(source, "requests", None), "normalized": 0, "matched": 0, "new": 0, "missing": 0, "reopened": 0, "closure_candidates": 0}
+    counts = {"fetched": len(fetched), "families": family_counts, "requests": getattr(source, "requests", None), "normalized": 0, "matched": 0, "new": 0, "missing": 0, "seven_missing": 0, "reopened": 0, "closure_candidates": 0}
     # Most stores have a usable address. Index that and nearby coordinate cells
     # so a prefecture-sized snapshot does not compare every pair of stores.
     by_address: dict[tuple[str, str], list[dict]] = {}
@@ -98,6 +98,11 @@ def apply_snapshot(state: dict, source, snapshot_key: str, observed_at: str, mis
             counts["new"] += 1
         observed_ids.add(store["id"])
         state["observations"].append({"id": str(uuid4()), "snapshot_run_id": run["id"], "store_id": store["id"], "source": raw.source, "source_store_id": raw.source_store_id, "observed_name": raw.name, "observed_address": raw.address, "lat": raw.lat, "lng": raw.lng, "source_category": raw.source_category, "source_business_type": raw.source_business_type, "licenses": raw.licenses, "attributions": raw.attributions, "raw_payload": raw.raw_payload, "fetched_at": utc_now(), "observed_at": observed_at})
+    for seven in state["stores"]:
+        if seven["id"] in prior_ids and seven["id"] not in observed_ids and seven["brand_family"] == "SEVEN_ELEVEN":
+            seven["current_presence"] = "MISSING"
+            seven["missing_count"] = seven.get("missing_count", 0) + 1
+            counts["seven_missing"] += 1
     sevens = [s for s in state["stores"] if s["brand_family"] == "SEVEN_ELEVEN" and s["current_presence"] == "PRESENT"]
     for store in state["stores"]:
         if store["id"] not in prior_ids or store["id"] in observed_ids or store["brand_family"] == "SEVEN_ELEVEN":
