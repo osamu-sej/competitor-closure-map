@@ -77,7 +77,9 @@ python3 -m collector set-status --event-id <UUID> --status RELOCATED --reason '�
 - `GET /api/map/events?bbox=minLng,minLat,maxLng,maxLat`: 表示領域のイベント。
 - `GET /api/health`: DB 疎通と最新成功 snapshot。
 
-地図のスタイルは `NEXT_PUBLIC_MAP_STYLE_URL` で変更できます。既定は OpenFreeMap の Liberty style です。地図上の×は競合のイベント、選択中の7は最寄り Seven、破線は両店間を示します。選択時に距離フィルターと同じ半径の円を描画します。距離は直線距離で、道路移動距離ではありません。画面の「状態の説明」から各ステータスの意味を確認できます。
+地図のスタイルは `NEXT_PUBLIC_MAP_STYLE_URL` で変更できます。既定は OpenFreeMap の Liberty style です。地図には一覧の競合店舗と、それぞれに紐づく最寄りのセブン-イレブンをロゴで表示します。競合ロゴの×は閉店・消失イベントを示します。同じセブンが複数イベントの最寄りでも、マーカーは1つにまとめます。店舗を選ぶと両店が見えるよう地図が移動し、破線と距離フィルターと同じ半径の円を描画します。距離は直線距離で、道路移動距離ではありません。画面の「状態の説明」から各ステータスの意味を確認できます。
+
+地図のブランド識別用ロゴは Wikimedia Commons の [セブン-イレブン](https://commons.wikimedia.org/wiki/File:7-eleven_logo.svg)、[FamilyMart](https://commons.wikimedia.org/wiki/File:FamilyMart_Logo_(2016-).svg)、[LAWSON](https://commons.wikimedia.org/wiki/File:Lawson_logo.svg) を同梱しています。各商標はそれぞれの権利者に帰属します。
 
 ## テストとビルド
 
