@@ -10,3 +10,4 @@ playwright-report/
 *.tsbuildinfo
 data/
 !data/.gitkeep
+backup/

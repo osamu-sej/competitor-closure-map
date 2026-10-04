@@ -50,6 +50,23 @@ OpenPOI の取得結果は、成功したブランドごとに `data/openpoi-cac
 
 **Render Free Postgres は2026年11月3日に期限を迎え、バックアップもありません。継続運用には期限前に永続DBへ移行してください。** 無料枠では長期保存を保証できません。移行時は `pg_dump` / `pg_restore` で履歴ごと移し、RenderとGitHubの接続先を更新します。
 
+### 暗号化バックアップと復元
+
+全国 snapshot が成功した後、GitHub Actions は PostgreSQL 18 の `pg_dump` でDB全体を保存し、AES-256-GCMで暗号化して Actions 成果物に90日間保持します。暗号鍵はリポジトリ Secret `BACKUP_ENCRYPTION_KEY` と運用者のローカルファイル `~/.config/competitor-closure-map/backup.key` にあります。鍵は公開リポジトリへcommitしないでください。**成果物の保存期限はDBの保存期限を延長しません。**
+
+復元する際は対象実行の成果物 `database-backup-<run-id>` をダウンロードし、空の PostgreSQL 18 + PostGIS 対応DBへ取り込みます。取り込み前に接続先が空の移行先DBであることを確認してください。
+
+```bash
+gh run download <run-id> -R osamu-sej/competitor-closure-map -n database-backup-<run-id> -D backup
+python3 -m pip install 'cryptography>=45,<47'
+export BACKUP_ENCRYPTION_KEY="$(cat ~/.config/competitor-closure-map/backup.key)"
+python3 scripts/backup_crypto.py decrypt backup/database.dump.enc backup/database.dump
+pg_restore --list backup/database.dump
+pg_restore --no-owner --no-acl --exit-on-error --dbname="$NEW_DATABASE_URL" backup/database.dump
+```
+
+復元後は平文の `backup/database.dump` を削除し、公開WebとGitHub Actionsの `DATABASE_URL` を移行先へ切り替えます。鍵のローカルファイルを失うと、GitHub Secretから値を読み戻せないため、暗号化成果物は復号できなくなります。
+
 ## 閉店確認とAPI
 
 公開側は読み取り専用です。根拠登録と手動の分類はサーバー側CLIから行います。
