@@ -137,7 +137,14 @@ export async function health(prefecture='') {
   const values=prefecture?[prefecture]:[];
   const result=await pool.query(`select max(finished_at) as latest_snapshot,count(*)::integer as snapshot_count,count(distinct prefecture)::integer as prefecture_count from snapshot_runs where status='succeeded'${condition}`,values);
   const stores=await pool.query(`select brand_family,count(*)::integer as count from stores where current_presence='PRESENT'${condition} group by brand_family`,values);
-  const bounds=prefecture?await pool.query(`select min(lng) as west,min(lat) as south,max(lng) as east,max(lat) as north from stores where current_presence='PRESENT'${condition}`,values):null;
+  // Source prefecture labels can contain a few coordinates far outside the
+  // prefecture. Fit the common footprint instead of one erroneous POI.
+  const bounds=prefecture?await pool.query(`select
+    percentile_cont(0.01) within group(order by lng) as west,
+    percentile_cont(0.01) within group(order by lat) as south,
+    percentile_cont(0.99) within group(order by lng) as east,
+    percentile_cont(0.99) within group(order by lat) as north
+    from stores where current_presence='PRESENT'${condition}`,values):null;
   const brands=Object.fromEntries(['FAMILY_MART','LAWSON','SEVEN_ELEVEN'].map(family=>[family,stores.rows.find(row=>row.brand_family===family)?.count??0]));
   return {ok:true,mode:'database',db:'connected',...result.rows[0],store_count:stores.rows.reduce((sum,row)=>sum+row.count,0),brands,scope_prefecture:prefecture,extent:bounds?.rows[0]?.west==null?null:bounds.rows[0]};
 }

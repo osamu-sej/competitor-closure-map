@@ -4,9 +4,10 @@ FamilyMart 系・LAWSON 系・セブン-イレブンの店舗位置を OpenPOI �
 
 公開先: https://competitor-closure-map.onrender.com/
 
-現在のアプリ版: **v0.2.1**。画面左上に版数を表示し、`GET /api/version` で版数とデプロイコミットを確認できます。機能を変更する際は package/lock の版数、画面表示、README を合わせて更新します。
+現在のアプリ版: **v0.2.2**。画面左上に版数を表示し、`GET /api/version` で版数とデプロイコミットを確認できます。機能を変更する際は package/lock の版数、画面表示、README を合わせて更新します。
 
 公開版は **収録店舗マップ** を初期表示します。OpenPOIから実際に取得した全国23,795件を、地図の表示範囲では件数マーカーにまとめ、拡大すると個別のブランドロゴで表示します。右側の実店舗一覧はブランド・都道府県・市区町村・店名/住所で検索できます。**閉店・消失シグナル** に切り替えると、時系列差分から検知したイベントだけを表示します。収録店舗は営業中と確認済みという意味ではありません。
+都道府県を選ぶと、県名と座標が矛盾する少数のPOIに画面が引きずられないよう、収録店の座標分布の1〜99パーセンタイルへ地図を寄せます。外れ値をDBから削除する処理ではありません。
 
 店舗詳細の「Googleマップで店舗を照合」は[Google Maps URLs](https://developers.google.com/maps/documentation/urls/get-started)で別画面の検索を開きます。APIキーは不要で、Googleの検索結果はアプリに取り込みません。[Places APIの検索](https://developers.google.com/maps/documentation/places/web-service/nearby-search)は1リクエスト最大20件で、[利用条件](https://cloud.google.com/maps-platform/terms/maps-service-terms)はPlacesデータをOpenFreeMapのような他社地図と組み合わせて表示することや、店舗マスタとして長期保存することを制限します。そのためGoogle Placesを全国の永続的な店舗マスタ・閉店履歴の代替として使っていません。Google Maps上の表示と、このアプリのOpenPOI収録数は一致しません。
 
