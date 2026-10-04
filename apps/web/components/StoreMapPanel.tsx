@@ -70,10 +70,8 @@ export default function StoreMapPanel({brands,prefecture,municipality,q,extent,s
         element.className=`map-current-marker ${point.count>1?'cluster':''} ${selected?.id===point.id?'active':''}`;
         element.title=point.count>1?`${point.count}件・拡大して表示`:point.canonical_name??'収録店舗';
         element.setAttribute('aria-label',element.title);
-        for(const brand of point.brand_family==='MIXED'?brands:[point.brand_family]){
-          const image=document.createElement('img');image.src=logos[brand];image.alt='';element.appendChild(image);
-        }
         if(point.count>1){const count=document.createElement('b');count.textContent=String(point.count);element.appendChild(count);}
+        else {const image=document.createElement('img');image.src=logos[point.brand_family];image.alt='';element.appendChild(image);}
         element.onclick=()=>{
           if(point.id)onSelect(point.id);
           else map.current?.easeTo({center:[point.lng,point.lat],zoom:Math.min(map.current.getZoom()+3,19),duration:350});

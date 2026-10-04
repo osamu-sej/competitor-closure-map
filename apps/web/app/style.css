@@ -50,9 +50,8 @@
 .store-map-hint{position:absolute;top:14px;left:14px;max-width:min(390px,calc(100% - 28px));background:#fffef1ee;border:1px solid #e1ded0;border-radius:6px;padding:8px 10px;font-size:11px;line-height:1.4;color:#495968}
 .map-current-marker{display:flex;align-items:center;justify-content:center;gap:4px;min-width:35px;height:34px;max-width:88px;border:2px solid #fff;border-radius:8px;background:#fff;box-shadow:0 2px 10px #132f4855;padding:3px 5px;cursor:pointer}
 .map-current-marker img{display:block;width:50px;max-width:100%;height:23px;object-fit:contain;pointer-events:none}
-.map-current-marker.cluster{border-color:#1b6884;background:#f4fbfe}
-.map-current-marker.cluster img{width:29px}
-.map-current-marker b{font-size:11px;color:#154b68}
+.map-current-marker.cluster{min-width:36px;width:36px;max-width:36px;height:36px;border:2px solid #fff;border-radius:50%;background:#15556f;box-shadow:0 2px 8px #102b4b88}
+.map-current-marker b{font-size:11px;color:#fff}
 .map-current-marker.active{outline:3px solid #e26038;outline-offset:2px}
 .external-map-link{display:inline-block;margin-top:19px;padding:9px 12px;border:1px solid #bed6e2;border-radius:6px;background:#f2f8fb;font-size:12px;font-weight:700;text-decoration:none}
 .external-map-link:hover{text-decoration:underline}
