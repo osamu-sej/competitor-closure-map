@@ -9,7 +9,7 @@ from collector.matching import matches
 from collector.model import RawStore
 from collector.normalization import brand_family, normalize_address, normalize_name
 from collector.sources.fixture import FixtureSource
-from collector.sources.openpoi import OpenPoiSource
+from collector.sources.openpoi import KEYWORDS, OpenPoiSource
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -105,6 +105,18 @@ class CollectorTests(unittest.TestCase):
             retry=OpenPoiSource(cache_key='week-1',cache_dir=Path(directory))
             with patch.object(retry,'_fetch_family',side_effect=AssertionError('network should not be used')):
                 self.assertEqual(retry.fetch_stores('神奈川県','LAWSON'),[row])
+
+    def test_openpoi_keyword_change_invalidates_cache(self):
+        row=RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='openpoi')
+        with TemporaryDirectory() as directory:
+            first=OpenPoiSource(cache_key='week-1',cache_dir=Path(directory))
+            with patch.object(first,'_fetch_family',return_value=[row]):
+                first.fetch_stores('神奈川県','LAWSON')
+            changed=OpenPoiSource(cache_key='week-1',cache_dir=Path(directory))
+            with patch.dict(KEYWORDS,{'LAWSON':KEYWORDS['LAWSON']+['LAWSON STORE']},clear=False):
+                with patch.object(changed,'_fetch_family',return_value=[row]) as fetch:
+                    changed.fetch_stores('神奈川県','LAWSON')
+                    self.assertEqual(fetch.call_count,1)
 
     def test_prefecture_snapshots_do_not_mark_other_prefectures_missing(self):
         kanagawa=[RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.6,prefecture='神奈川県')]

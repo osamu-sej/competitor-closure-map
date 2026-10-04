@@ -2,6 +2,11 @@ name: OpenPOI nationwide snapshot
 
 on:
   workflow_dispatch:
+    inputs:
+      snapshot_key:
+        description: Optional unique key for a fresh nationwide baseline
+        required: false
+        type: string
   schedule:
     # OpenPOI's JFF data refreshes weekly; run Monday at 12:00 JST.
     - cron: '0 3 * * 1'
@@ -20,6 +25,7 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
+      MANUAL_SNAPSHOT_KEY: ${{ inputs.snapshot_key }}
       PGSSLMODE: require
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +39,7 @@ jobs:
         run: python -m collector migrate
       - name: Collect and compare all prefectures
         run: |
-          SNAPSHOT_KEY="openpoi-$(date -u +%G-W%V)"
+          SNAPSHOT_KEY="${MANUAL_SNAPSHOT_KEY:-openpoi-$(date -u +%G-W%V)}"
           python -m collector snapshot --source openpoi --prefecture 全国 --snapshot-key "$SNAPSHOT_KEY"
       - name: Create encrypted PostgreSQL backup
         run: |

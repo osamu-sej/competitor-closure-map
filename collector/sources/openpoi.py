@@ -22,7 +22,7 @@ JAPAN_BBOX = (122.0, 20.0, 154.5, 46.1)
 KEYWORDS = {
     "FAMILY_MART": ["ファミリーマート", "ファミマ", "FamilyMart"],
     "LAWSON": ["ローソン", "LAWSON"],
-    "SEVEN_ELEVEN": ["セブンイレブン", "セブン-イレブン", "7-Eleven"],
+    "SEVEN_ELEVEN": ["セブンイレブン", "セブン-イレブン", "セブン‐イレブン", "セブン－イレブン", "7-Eleven", "Seven Eleven"],
 }
 
 
@@ -50,7 +50,7 @@ class OpenPoiSource(StoreSource):
         path = self._cache_path(brand_family)
         if path and path.exists() and os.getenv("OPENPOI_REFRESH_CACHE") != "1":
             payload = json.loads(path.read_text(encoding="utf-8"))
-            if payload.get("version") == 1 and payload.get("base_url") == self.base_url:
+            if payload.get("version") == 2 and payload.get("base_url") == self.base_url and payload.get("keywords") == KEYWORDS[brand_family]:
                 rows = [RawStore(**row) for row in payload["stores"]]
                 if rows:
                     print(f"OpenPOI {brand_family}: {len(rows)} stores from local cache", flush=True)
@@ -59,7 +59,7 @@ class OpenPoiSource(StoreSource):
         if path:
             path.parent.mkdir(parents=True, exist_ok=True)
             temporary = path.with_suffix(".tmp")
-            temporary.write_text(json.dumps({"version": 1, "base_url": self.base_url, "stores": [asdict(row) for row in rows]}, ensure_ascii=False), encoding="utf-8")
+            temporary.write_text(json.dumps({"version": 2, "base_url": self.base_url, "keywords": KEYWORDS[brand_family], "stores": [asdict(row) for row in rows]}, ensure_ascii=False), encoding="utf-8")
             temporary.replace(path)
         return rows
 

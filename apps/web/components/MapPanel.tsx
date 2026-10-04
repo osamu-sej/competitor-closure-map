@@ -111,7 +111,7 @@ export default function MapPanel({items,selected,distance,onSelect}:{items:Closu
     <div ref={container} className="map-canvas" data-testid="map"/>
     {!ready&&!error&&<div className="map-message">地図を読み込み中…</div>}{error&&<div className="map-message error">{error}</div>}
     {selected?.nearest_seven&&<div className="map-distance"><b>{Math.round(selected.distance_m??0)}m</b><span>{selected.store.canonical_name} → {selected.nearest_seven.canonical_name}</span><span>選択範囲: {distance===1000?'1km':distance+'m'} の円</span></div>}
-    <div className="map-legend" aria-label="地図の凡例"><span><img src={logoPaths.SEVEN_ELEVEN} alt=""/> 近隣セブン-イレブン</span><span><img src={logoPaths.FAMILY_MART} alt=""/><img src={logoPaths.LAWSON} alt=""/> 閉店・消失店舗 <b>×</b></span></div>
+    <div className="map-legend" aria-label="地図の凡例"><span><img src={logoPaths.SEVEN_ELEVEN} alt=""/> 収録された近隣セブン</span><span><img src={logoPaths.FAMILY_MART} alt=""/><img src={logoPaths.LAWSON} alt=""/> 閉店・消失店舗 <b>×</b></span></div>
     <div className="map-attribution">地図 © OpenFreeMap / OpenStreetMap contributors · POI: OpenPOI（出典は各観測記録）</div>
   </section>;
 }
