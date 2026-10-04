@@ -53,8 +53,8 @@ export async function listStoreMapPoints(filters:StoreFilters,bbox:[number,numbe
     const stores=currentFixtureStores(await fixtureState(),filters)
       .filter(store=>store.lng>=bbox[0]&&store.lat>=bbox[1]&&store.lng<=bbox[2]&&store.lat<=bbox[3]);
     const grouped=new Map<string,Store[]>();
-    for(const store of stores){const key=`${store.brand_family}:${Math.floor(store.lng/step)}:${Math.floor(store.lat/step)}`;grouped.set(key,[...(grouped.get(key)??[]),store]);}
-    const points=[...grouped.values()].map(group=>({brand_family:group[0].brand_family,lat:group.reduce((sum,s)=>sum+s.lat,0)/group.length,lng:group.reduce((sum,s)=>sum+s.lng,0)/group.length,count:group.length,id:group.length===1?group[0].id:null,canonical_name:group.length===1?group[0].canonical_name:null}));
+    for(const store of stores){const key=`${Math.floor(store.lng/step)}:${Math.floor(store.lat/step)}`;grouped.set(key,[...(grouped.get(key)??[]),store]);}
+    const points=[...grouped.values()].map(group=>({brand_family:group.every(store=>store.brand_family===group[0].brand_family)?group[0].brand_family:'MIXED',lat:group.reduce((sum,s)=>sum+s.lat,0)/group.length,lng:group.reduce((sum,s)=>sum+s.lng,0)/group.length,count:group.length,id:group.length===1?group[0].id:null,canonical_name:group.length===1?group[0].canonical_name:null}));
     return {points:points.slice(0,1200),truncated:points.length>1200};
   }
   const values:unknown[]=[filters.brands,...bbox,step];
@@ -66,10 +66,11 @@ export async function listStoreMapPoints(filters:StoreFilters,bbox:[number,numbe
       select id,brand_family,canonical_name,lat,lng,floor(lng/$6::double precision) as x,floor(lat/$6::double precision) as y
       from stores where current_presence='PRESENT' and brand_family=any($1::text[])
         and lng between $2 and $4 and lat between $3 and $5${extra.length?` and ${extra.join(' and ')}`:''}
-    ) select brand_family,avg(lat)::double precision as lat,avg(lng)::double precision as lng,
+    ) select case when count(distinct brand_family)=1 then min(brand_family) else 'MIXED' end as brand_family,
+      avg(lat)::double precision as lat,avg(lng)::double precision as lng,
       count(*)::integer as count,case when count(*)=1 then min(id::text) else null end as id,
       case when count(*)=1 then min(canonical_name) else null end as canonical_name
-      from visible group by brand_family,x,y order by count desc limit 1201`,values);
+      from visible group by x,y order by count desc limit 1201`,values);
   return {points:rows.rows.slice(0,1200),truncated:rows.rows.length>1200};
 }
 function fixtureClosure(state:State, event:Record<string,unknown>):Closure {
@@ -130,12 +131,13 @@ export async function getHistory(id:string) {
   return rows.rows;
 }
 export async function health(prefecture='') {
-  if (!pool) {const state=await fixtureState();const stores=state.stores.filter(s=>s.current_presence==='PRESENT'&&(!prefecture||s.prefecture===prefecture));return {ok:true,mode:'fixture',db:'not configured',latest_snapshot:state.runs.filter(r=>r.status==='succeeded').at(-1)?.finished_at??null,snapshot_count:state.runs.length,prefecture_count:1,store_count:stores.length,brands:Object.fromEntries(['FAMILY_MART','LAWSON','SEVEN_ELEVEN'].map(family=>[family,stores.filter(s=>s.brand_family===family).length]))};}
+  if (!pool) {const state=await fixtureState();const stores=state.stores.filter(s=>s.current_presence==='PRESENT'&&(!prefecture||s.prefecture===prefecture));return {ok:true,mode:'fixture',db:'not configured',latest_snapshot:state.runs.filter(r=>r.status==='succeeded').at(-1)?.finished_at??null,snapshot_count:state.runs.length,prefecture_count:1,store_count:stores.length,brands:Object.fromEntries(['FAMILY_MART','LAWSON','SEVEN_ELEVEN'].map(family=>[family,stores.filter(s=>s.brand_family===family).length])),scope_prefecture:prefecture,extent:stores.length?{west:Math.min(...stores.map(s=>s.lng)),south:Math.min(...stores.map(s=>s.lat)),east:Math.max(...stores.map(s=>s.lng)),north:Math.max(...stores.map(s=>s.lat))}:null};}
   await pool.query('select 1');
   const condition=prefecture?' and prefecture=$1':'';
   const values=prefecture?[prefecture]:[];
   const result=await pool.query(`select max(finished_at) as latest_snapshot,count(*)::integer as snapshot_count,count(distinct prefecture)::integer as prefecture_count from snapshot_runs where status='succeeded'${condition}`,values);
   const stores=await pool.query(`select brand_family,count(*)::integer as count from stores where current_presence='PRESENT'${condition} group by brand_family`,values);
+  const bounds=prefecture?await pool.query(`select min(lng) as west,min(lat) as south,max(lng) as east,max(lat) as north from stores where current_presence='PRESENT'${condition}`,values):null;
   const brands=Object.fromEntries(['FAMILY_MART','LAWSON','SEVEN_ELEVEN'].map(family=>[family,stores.rows.find(row=>row.brand_family===family)?.count??0]));
-  return {ok:true,mode:'database',db:'connected',...result.rows[0],store_count:stores.rows.reduce((sum,row)=>sum+row.count,0),brands};
+  return {ok:true,mode:'database',db:'connected',...result.rows[0],store_count:stores.rows.reduce((sum,row)=>sum+row.count,0),brands,scope_prefecture:prefecture,extent:bounds?.rows[0]?.west==null?null:bounds.rows[0]};
 }

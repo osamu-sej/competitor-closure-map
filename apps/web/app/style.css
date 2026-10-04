@@ -54,5 +54,7 @@
 .map-current-marker.cluster img{width:29px}
 .map-current-marker b{font-size:11px;color:#154b68}
 .map-current-marker.active{outline:3px solid #e26038;outline-offset:2px}
+.external-map-link{display:inline-block;margin-top:19px;padding:9px 12px;border:1px solid #bed6e2;border-radius:6px;background:#f2f8fb;font-size:12px;font-weight:700;text-decoration:none}
+.external-map-link:hover{text-decoration:underline}
 @media(max-width:900px){.dashboard.data-mode .content,.dashboard.demo-mode .content{height:auto}.store-content{grid-template-columns:1fr}.store-filterbar .brand-filter{min-width:0}}
 @media(max-width:600px){.view-switch{padding:7px 12px}.view-switch button{flex:1;padding:8px 5px;font-size:11px}}

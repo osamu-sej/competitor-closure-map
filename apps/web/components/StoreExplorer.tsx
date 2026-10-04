@@ -3,11 +3,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Store } from '../lib/types';
 import { prefectures } from '../lib/prefectures';
 import StoreMapPanel from './StoreMapPanel';
+import { googleMapsSearchUrl } from '../lib/maps-url';
 
 const allBrands=['FAMILY_MART','LAWSON','SEVEN_ELEVEN'];
 const brandLabels:Record<string,string>={FAMILY_MART:'ファミリーマート',LAWSON:'ローソン',SEVEN_ELEVEN:'セブン-イレブン'};
 
-export default function StoreExplorer({prefecture,setPrefecture}:{prefecture:string;setPrefecture:(value:string)=>void}) {
+export default function StoreExplorer({prefecture,setPrefecture,extent}:{prefecture:string;setPrefecture:(value:string)=>void;extent:{west:number;south:number;east:number;north:number}|null}) {
   const [brands,setBrands]=useState(allBrands);
   const [municipality,setMunicipality]=useState('');
   const [query,setQuery]=useState('');
@@ -43,7 +44,7 @@ export default function StoreExplorer({prefecture,setPrefecture}:{prefecture:str
       <label>店名・住所<input aria-label="店名・住所" placeholder="店舗を検索" value={query} onChange={event=>setQuery(event.target.value)}/></label>
     </div>
     <div className="content store-content">
-      <StoreMapPanel brands={brands} prefecture={prefecture} municipality={municipality} q={appliedQuery} selected={selected} onSelect={select}/>
+      <StoreMapPanel brands={brands} prefecture={prefecture} municipality={municipality} q={appliedQuery} extent={extent} selected={selected} onSelect={select}/>
       <aside className="sidebar"><div className="sidebar-heading"><div><span className="eyebrow">OBSERVED STORES</span><h2>収録店舗一覧 <small>{total.toLocaleString()} 件</small></h2></div><div className="legend">収録できた実店舗の位置</div></div>
         {loading&&<div className="state-message">読み込み中…</div>}
         {error&&<div className="state-message error">{error}</div>}
@@ -52,6 +53,6 @@ export default function StoreExplorer({prefecture,setPrefecture}:{prefecture:str
         {total>100&&<div className="pagination"><button disabled={page===0} onClick={()=>setPage(page-1)}>前へ</button><span>{page+1} / {Math.ceil(total/100)}</span><button disabled={(page+1)*100>=total} onClick={()=>setPage(page+1)}>次へ</button></div>}
       </aside>
     </div>
-    {selected&&<div className="detail-backdrop" onClick={()=>setSelected(null)}><section className="detail-panel" role="dialog" aria-label="収録店舗詳細" onClick={event=>event.stopPropagation()}><button className="close" aria-label="詳細を閉じる" onClick={()=>setSelected(null)}>×</button><span className="eyebrow">OBSERVED STORE</span><h2>{selected.canonical_name}</h2><div className="detail-tags"><span className="brand-badge">{brandLabels[selected.brand_family]}</span><span>OpenPOI収録</span></div><div className="detail-scroll"><h3>収録情報</h3><dl><dt>住所</dt><dd>{selected.address}</dd><dt>都道府県</dt><dd>{selected.prefecture}</dd><dt>市区町村</dt><dd>{selected.city}</dd><dt>位置</dt><dd>{selected.lat.toFixed(6)}, {selected.lng.toFixed(6)}</dd></dl><p className="store-caveat">OpenPOIの掲載地点です。営業中かどうか、全店舗が収録されているかは保証されません。</p></div></section></div>}
+    {selected&&<div className="detail-backdrop" onClick={()=>setSelected(null)}><section className="detail-panel" role="dialog" aria-label="収録店舗詳細" onClick={event=>event.stopPropagation()}><button className="close" aria-label="詳細を閉じる" onClick={()=>setSelected(null)}>×</button><span className="eyebrow">OBSERVED STORE</span><h2>{selected.canonical_name}</h2><div className="detail-tags"><span className="brand-badge">{brandLabels[selected.brand_family]}</span><span>OpenPOI収録</span></div><div className="detail-scroll"><h3>収録情報</h3><dl><dt>住所</dt><dd>{selected.address}</dd><dt>都道府県</dt><dd>{selected.prefecture}</dd><dt>市区町村</dt><dd>{selected.city}</dd><dt>位置</dt><dd>{selected.lat.toFixed(6)}, {selected.lng.toFixed(6)}</dd></dl><a className="external-map-link" href={googleMapsSearchUrl(selected)} target="_blank" rel="noopener noreferrer">Googleマップで店舗を照合 ↗</a><p className="store-caveat">OpenPOIの掲載地点です。営業中かどうか、全店舗が収録されているかは保証されません。Googleマップの検索結果も同一店舗・営業状況を自動確定するものではありません。</p></div></section></div>}
   </>;
 }

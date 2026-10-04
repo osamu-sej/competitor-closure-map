@@ -5,7 +5,8 @@ import type { Store, StoreMapPoint } from '../lib/types';
 
 const logos:Record<string,string>={FAMILY_MART:'/brand-logos/familymart.svg',LAWSON:'/brand-logos/lawson.svg',SEVEN_ELEVEN:'/brand-logos/seven-eleven.svg'};
 
-export default function StoreMapPanel({brands,prefecture,municipality,q,selected,onSelect}:{brands:string[];prefecture:string;municipality:string;q:string;selected:Store|null;onSelect:(id:string)=>void}) {
+type Extent={west:number;south:number;east:number;north:number};
+export default function StoreMapPanel({brands,prefecture,municipality,q,extent,selected,onSelect}:{brands:string[];prefecture:string;municipality:string;q:string;extent:Extent|null;selected:Store|null;onSelect:(id:string)=>void}) {
   const container=useRef<HTMLDivElement>(null);
   const map=useRef<MapType|null>(null);
   const markers=useRef<Marker[]>([]);
@@ -27,6 +28,18 @@ export default function StoreMapPanel({brands,prefecture,municipality,q,selected
     }).catch(()=>setError('地図を読み込めません。'));
     return()=>{disposed=true;markers.current.forEach(marker=>marker.remove());instance?.remove();map.current=null;};
   },[]);
+  useEffect(()=>{
+    const instance=map.current;
+    if(!ready||!instance)return;
+    if(!prefecture){instance.fitBounds([[122,20],[154.5,46.1]],{padding:20,duration:350});return;}
+    if(extent){
+      const west=extent.west===extent.east?extent.west-0.02:extent.west;
+      const east=extent.west===extent.east?extent.east+0.02:extent.east;
+      const south=extent.south===extent.north?extent.south-0.02:extent.south;
+      const north=extent.south===extent.north?extent.north+0.02:extent.north;
+      instance.fitBounds([[west,south],[east,north]],{padding:65,maxZoom:12,duration:350});
+    }
+  },[ready,prefecture,extent?.west,extent?.south,extent?.east,extent?.north]);
   useEffect(()=>{
     const instance=map.current;
     if(!ready||!instance)return;
@@ -57,7 +70,9 @@ export default function StoreMapPanel({brands,prefecture,municipality,q,selected
         element.className=`map-current-marker ${point.count>1?'cluster':''} ${selected?.id===point.id?'active':''}`;
         element.title=point.count>1?`${point.count}件・拡大して表示`:point.canonical_name??'収録店舗';
         element.setAttribute('aria-label',element.title);
-        const image=document.createElement('img');image.src=logos[point.brand_family];image.alt='';element.appendChild(image);
+        for(const brand of point.brand_family==='MIXED'?brands:[point.brand_family]){
+          const image=document.createElement('img');image.src=logos[brand];image.alt='';element.appendChild(image);
+        }
         if(point.count>1){const count=document.createElement('b');count.textContent=String(point.count);element.appendChild(count);}
         element.onclick=()=>{
           if(point.id)onSelect(point.id);

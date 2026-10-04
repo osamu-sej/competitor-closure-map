@@ -58,16 +58,18 @@ test('filters keep list and map aligned and detail uses last observation', async
 
 test('store map shows collected locations and a visible release version', async ({page})=>{
   await page.goto('/');
-  await expect(page.getByRole('link',{name:'v0.2.0'})).toBeVisible();
+  await expect(page.getByRole('link',{name:'v0.2.1'})).toBeVisible();
   const version=await page.request.get('/api/version');
-  expect((await version.json()).version).toBe('0.2.0');
+  expect((await version.json()).version).toBe('0.2.1');
   await page.getByRole('button',{name:'収録店舗マップ'}).click();
   await expect(page.getByRole('heading',{name:/収録店舗一覧/})).toContainText('2 件');
   await expect(page.locator('.store-result')).toHaveCount(2);
-  await expect(page.locator('.map-current-marker')).toHaveCount(2);
+  await expect(page.locator('.map-current-marker')).toHaveCount(1);
+  await expect(page.locator('.map-current-marker')).toHaveAttribute('aria-label','2件・拡大して表示');
   await page.getByRole('checkbox',{name:'ファミリーマート'}).uncheck();
   await expect(page.locator('.store-result')).toHaveCount(1);
   await expect(page.locator('.map-current-marker')).toHaveCount(1);
   await page.locator('.store-result').click();
   await expect(page.getByRole('dialog',{name:'収録店舗詳細'})).toContainText('セブン-イレブン 相模原中央店');
+  await expect(page.getByRole('link',{name:'Googleマップで店舗を照合'})).toHaveAttribute('href',/google\.com\/maps\/search\/\?api=1&query=/);
 });
