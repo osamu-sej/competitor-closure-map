@@ -71,18 +71,19 @@ python3 -m collector set-status --event-id <UUID> --status RELOCATED --reason '�
 
 ## API と画面
 
-- `GET /api/closures`: 状態・ブランド・50/100/300m・市区町村・期間・ページで絞り込み。既定は確認済みかつ100m以内。最大100件/ページ。raw payload は返しません。
+- `GET /api/closures`: 状態・複数ブランド・50/100/300/500/1000m・市区町村・期間・ページで絞り込み。ブランドは `brands=FAMILY_MART,LAWSON` 形式で指定します。従来の単一 `brand=` も使用できます。既定は両ブランド、確認済みかつ100m以内。最大100件/ページ。raw payload は返しません。
 - `GET /api/closures/:id`: 詳細、閉店前の最終観測、根拠。
 - `GET /api/stores/:id/history`: 店舗の観測履歴。
 - `GET /api/map/events?bbox=minLng,minLat,maxLng,maxLat`: 表示領域のイベント。
 - `GET /api/health`: DB 疎通と最新成功 snapshot。
 
-地図のスタイルは `NEXT_PUBLIC_MAP_STYLE_URL` で変更できます。既定は OpenFreeMap の Liberty style です。地図上の×は競合のイベント、選択中の7は最寄り Seven、破線は両店間を示します。選択時に100m 円を描画します。距離は直線距離で、道路移動距離ではありません。
+地図のスタイルは `NEXT_PUBLIC_MAP_STYLE_URL` で変更できます。既定は OpenFreeMap の Liberty style です。地図上の×は競合のイベント、選択中の7は最寄り Seven、破線は両店間を示します。選択時に距離フィルターと同じ半径の円を描画します。距離は直線距離で、道路移動距離ではありません。画面の「状態の説明」から各ステータスの意味を確認できます。
 
 ## テストとビルド
 
 ```bash
 python3 -m unittest discover -s tests -v
+npm run test:filters
 npm run build
 npm run test:ui
 ```

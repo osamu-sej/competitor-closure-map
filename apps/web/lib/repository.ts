@@ -25,7 +25,7 @@ function fixtureClosure(state:State, event:Record<string,unknown>):Closure {
 }
 function filtered(event:Closure, f:Filters):boolean {
   if (f.status === 'CLOSED_BOTH' ? !['CLOSED_CONFIRMED','CLOSED_SUSPECTED'].includes(event.status) : f.status !== 'ALL' && event.status !== f.status) return false;
-  if (f.brand !== 'ALL' && event.store.brand_family !== f.brand) return false;
+  if (!f.brands.includes(event.store.brand_family)) return false;
   if (event.distance_m == null || event.distance_m > f.distance) return false;
   if (f.municipality && !event.store.city.includes(f.municipality)) return false;
   const date = event.closure_date ?? event.detected_at.slice(0,10);
@@ -49,7 +49,7 @@ export async function listClosures(f:Filters):Promise<{items:Closure[];total:num
   const predicates=[`e.distance_m <= $1`];
   if (f.status === 'CLOSED_BOTH') predicates.push(`e.status in ('CLOSED_CONFIRMED','CLOSED_SUSPECTED')`);
   else if (f.status !== 'ALL') {values.push(f.status);predicates.push(`e.status = $${values.length}`);}
-  if (f.brand !== 'ALL') {values.push(f.brand);predicates.push(`s.brand_family = $${values.length}`);}
+  values.push(f.brands);predicates.push(`s.brand_family = any($${values.length}::text[])`);
   if (f.municipality) {values.push(`%${f.municipality.replace(/[\\%_]/g,'\\$&')}%`);predicates.push(`s.city ilike $${values.length} escape '\\'`);}
   if (f.from) {values.push(f.from);predicates.push(`coalesce(e.closure_date,e.detected_at::date) >= $${values.length}::date`);}
   if (f.to) {values.push(f.to);predicates.push(`coalesce(e.closure_date,e.detected_at::date) <= $${values.length}::date`);}
