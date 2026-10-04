@@ -74,10 +74,13 @@ export async function getHistory(id:string) {
   const rows=await pool.query('select id,snapshot_run_id,source,source_store_id,observed_name,observed_address,lat,lng,source_category,source_business_type,attributions,observed_at from store_observations where store_id=$1 order by observed_at desc limit 100',[id]);
   return rows.rows;
 }
-export async function health() {
-  if (!pool) {const state=await fixtureState();return {ok:true,mode:'fixture',db:'not configured',latest_snapshot:state.runs.filter(r=>r.status==='succeeded').at(-1)?.finished_at??null,snapshot_count:state.runs.length,prefecture_count:1,store_count:state.stores.length};}
+export async function health(prefecture='') {
+  if (!pool) {const state=await fixtureState();const stores=state.stores.filter(s=>s.current_presence==='PRESENT'&&(!prefecture||s.prefecture===prefecture));return {ok:true,mode:'fixture',db:'not configured',latest_snapshot:state.runs.filter(r=>r.status==='succeeded').at(-1)?.finished_at??null,snapshot_count:state.runs.length,prefecture_count:1,store_count:stores.length,brands:Object.fromEntries(['FAMILY_MART','LAWSON','SEVEN_ELEVEN'].map(family=>[family,stores.filter(s=>s.brand_family===family).length]))};}
   await pool.query('select 1');
-  const result=await pool.query("select max(finished_at) as latest_snapshot,count(*)::integer as snapshot_count,count(distinct prefecture)::integer as prefecture_count from snapshot_runs where status='succeeded'");
-  const stores=await pool.query('select count(*)::integer as store_count from stores');
-  return {ok:true,mode:'database',db:'connected',...result.rows[0],store_count:stores.rows[0].store_count};
+  const condition=prefecture?' and prefecture=$1':'';
+  const values=prefecture?[prefecture]:[];
+  const result=await pool.query(`select max(finished_at) as latest_snapshot,count(*)::integer as snapshot_count,count(distinct prefecture)::integer as prefecture_count from snapshot_runs where status='succeeded'${condition}`,values);
+  const stores=await pool.query(`select brand_family,count(*)::integer as count from stores where current_presence='PRESENT'${condition} group by brand_family`,values);
+  const brands=Object.fromEntries(['FAMILY_MART','LAWSON','SEVEN_ELEVEN'].map(family=>[family,stores.rows.find(row=>row.brand_family===family)?.count??0]));
+  return {ok:true,mode:'database',db:'connected',...result.rows[0],store_count:stores.rows.reduce((sum,row)=>sum+row.count,0),brands};
 }

@@ -9,7 +9,7 @@ FamilyMart 系・LAWSON 系・セブン-イレブンの店舗位置を OpenPOI �
 - OpenPOI の掲載範囲は全実店舗を網羅しません。画面の店舗数は収集できた POI 件数です。
 - 初回の全国 snapshot は比較の基準を作るだけなので、実データの閉店イベントは0件です。次回以降の完全な取得と比較して初めて消失候補ができます。
 - 画面の期間は**既に検知したイベントの絞り込み**です。過去の日付を入れても、過去の店舗一覧を遡って取得しません。
-- 毎回同じ全国 bbox とブランド語で検索します。API 上限200件に達した範囲は再帰的に4分割し、取り切れなければ取り込み全体を失敗させます。前回に比べ1ブランド・1都道府県で収集件数が5%超減った場合も、ソース障害を疑い全体を失敗させ、閉店候補に反映しません。
+- 毎回同じ全国 bbox とブランド語で検索します。API 上限200件に達した範囲は再帰的に4分割し、取り切れなければ取り込み全体を失敗させます。前回に比べ1ブランド・1都道府県で収集件数が5%超（小件数では最低1件の変動を許容）減った場合も、ソース障害を疑い全体を失敗させ、閉店候補に反映しません。
 - 同じ店舗を指す複数ソースの POI は店名と30m以内の位置でまとめ、元のレコード・ライセンス・出典を観測履歴に保持します。同一店舗照合も保守的な推定であり、誤判定の可能性は残ります。
 - 地図の距離は閉店・消失店舗と最寄りのセブン-イレブンとの直線距離です。DBでは PostGIS geography で計算します。県境をまたいだ最寄りも対象です。
 
@@ -43,7 +43,7 @@ python3 -m collector snapshot --source openpoi --prefecture 全国 --snapshot-ke
 
 `--snapshot-key` は冪等性キーです。同じキーの再実行は既存 snapshot を返します。都道府県名を指定するとその県だけ取り込みますが、OpenPOI の検索は日本全国のデータを一度取得してキャッシュし、その県を抽出します。毎週の完全比較には `全国` を指定してください。CSV と fixture の既定県は神奈川県です。
 
-OpenPOI の取得結果は、成功したブランドごとに `data/openpoi-cache/` へ同じ snapshot key で一時保存します。DB保存に失敗して再実行する場合、取得済みブランドは再ダウンロードしません。キャッシュは Git 管理対象外で、保存済み snapshot があれば DB 側の冪等性チェックを優先します。ネットワーク取得中は DB の書き込みロックを保持しません。
+OpenPOI の取得結果は、成功したブランドごとに `data/openpoi-cache/` へ同じ snapshot key で一時保存します。DB保存に失敗して再実行する場合、取得済みブランドは再ダウンロードしません。キャッシュは Git 管理対象外で、保存済み snapshot があれば DB 側の冪等性チェックを優先します。元データを取り直すときは `OPENPOI_REFRESH_CACHE=1` を指定します。ネットワーク取得中は DB の書き込みロックを保持しません。
 
 公開Webに必要な変数は `DATA_MODE=database`、`NEXT_PUBLIC_DATA_MODE=database`、`DATABASE_URL` です。Render Blueprint は既存の `competitor-closure-map-db` から内部接続URLを参照します。GitHub Actions には同じDBの外部接続URLをリポジトリ Secret `DATABASE_URL` として登録します。ワークフローは `PGSSLMODE=require` で接続します。
 
@@ -58,7 +58,7 @@ python3 -m collector add-evidence --event-id <UUID> --type official --title '公
 python3 -m collector set-status --event-id <UUID> --status DATA_ISSUE --reason '掲載元の欠落を確認'
 ```
 
-`GET /api/closures` は `prefecture=東京都`、`brands=FAMILY_MART,LAWSON`、`status=CLOSED_BOTH`、`distance=500` などを受け付けます。`GET /api/closures/:id` は詳細と根拠、`GET /api/stores/:id/history` は観測履歴、`GET /api/health` はDB状態・最終取得・対象都道府県数・店舗数を返します。最大100件/ページです。
+`GET /api/closures` は `prefecture=東京都`、`brands=FAMILY_MART,LAWSON`、`status=CLOSED_BOTH`、`distance=500` などを受け付けます。`GET /api/closures/:id` は詳細と根拠、`GET /api/stores/:id/history` は観測履歴、`GET /api/health?prefecture=東京都` はDB状態・最終取得・都道府県別のブランド別店舗数を返します。最大100件/ページです。
 
 ## 検証
 

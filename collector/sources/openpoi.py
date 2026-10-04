@@ -48,7 +48,7 @@ class OpenPoiSource(StoreSource):
 
     def _load_family(self, brand_family: str) -> list[RawStore]:
         path = self._cache_path(brand_family)
-        if path and path.exists():
+        if path and path.exists() and os.getenv("OPENPOI_REFRESH_CACHE") != "1":
             payload = json.loads(path.read_text(encoding="utf-8"))
             if payload.get("version") == 1 and payload.get("base_url") == self.base_url:
                 rows = [RawStore(**row) for row in payload["stores"]]

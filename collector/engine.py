@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from math import ceil
 from uuid import uuid4
 
 from .matching import distance_m, matches
@@ -47,7 +48,8 @@ def apply_snapshot(state: dict, source, snapshot_key: str, observed_at: str, mis
     if prior_run and getattr(source, "guard_coverage", False):
         previous = prior_run.get("metadata", {}).get("families", {})
         for family, count in family_counts.items():
-            if previous.get(family, 0) >= 20 and count < previous[family] * 0.95:
+            previous_count = previous.get(family, 0)
+            if previous_count and count < previous_count - max(1, ceil(previous_count * 0.05)):
                 raise RuntimeError(f"{family} coverage fell from {previous[family]} to {count}; refusing incomplete snapshot")
     # Fetch completes before mutation; a failed source never creates a partial run.
     run = {"id": str(uuid4()), "snapshot_key": snapshot_key, "source": source_name, "prefecture": prefecture, "started_at": utc_now(), "finished_at": None, "status": "running", "store_count": 0, "metadata": {}}

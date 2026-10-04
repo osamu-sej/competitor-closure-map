@@ -15,12 +15,12 @@ const date=(value?:string|null)=>value?new Intl.DateTimeFormat('ja-JP',{timeZone
 export default function Dashboard(){
   const [status,setStatus]=useState('CLOSED_CONFIRMED');const [selectedBrands,setSelectedBrands]=useState(['FAMILY_MART','LAWSON']);const [distance,setDistance]=useState(100);
   const [prefecture,setPrefecture]=useState('');const [municipality,setMunicipality]=useState('');const [from,setFrom]=useState('');const [to,setTo]=useState('');
-  const [health,setHealth]=useState<{latest_snapshot:string|null;snapshot_count:number;prefecture_count:number;store_count:number}|null>(null);
+  const [health,setHealth]=useState<{latest_snapshot:string|null;snapshot_count:number;prefecture_count:number;store_count:number;brands:Record<string,number>}|null>(null);
   const [items,setItems]=useState<Closure[]>([]);const [total,setTotal]=useState(0);const [page,setPage]=useState(0);
   const [selectedId,setSelectedId]=useState<string|null>(null);const [detail,setDetail]=useState<Closure|null>(null);
   const [loading,setLoading]=useState(true);const [error,setError]=useState('');
   const params=useMemo(()=>new URLSearchParams({status,brands:selectedBrands.join(','),distance:String(distance),prefecture,municipality,from,to,page:String(page)}),[status,selectedBrands,distance,prefecture,municipality,from,to,page]);
-  useEffect(()=>{fetch('/api/health').then(response=>response.json()).then(setHealth).catch(()=>{});},[]);
+  useEffect(()=>{const controller=new AbortController();fetch(`/api/health?prefecture=${encodeURIComponent(prefecture)}`,{signal:controller.signal}).then(response=>response.json()).then(setHealth).catch(()=>{});return()=>controller.abort();},[prefecture]);
   useEffect(()=>{const controller=new AbortController();setLoading(true);setError('');fetch(`/api/closures?${params}`,{signal:controller.signal}).then(async response=>{if(!response.ok)throw new Error((await response.json()).error);return response.json();}).then(data=>{setItems(data.items);setTotal(data.total);setSelectedId(current=>data.items.some((item:Closure)=>item.id===current)?current:null);}).catch(err=>{if(err.name!=='AbortError')setError(err.message||'データ取得に失敗しました。');}).finally(()=>{if(!controller.signal.aborted)setLoading(false);});return()=>controller.abort();},[params]);
   useEffect(()=>{if(!selectedId){setDetail(null);return;}const controller=new AbortController();fetch(`/api/closures/${selectedId}`,{signal:controller.signal}).then(r=>r.json()).then(setDetail).catch(()=>{});return()=>controller.abort();},[selectedId]);
   const selected=items.find(item=>item.id===selectedId)??null;
@@ -31,7 +31,7 @@ export default function Dashboard(){
   return <main className={'dashboard'+(demoMode?' demo-mode':' data-mode')}>
     <header className="topbar"><div className="brandmark"><div className="brand-icon">↗</div><div><h1>競合閉店MAP</h1><p>全国 / 店舗マスタ差分モニター</p></div></div><div className="top-note"><span className="live-dot"/> {demoMode?'実データ未接続':'実データ'} <span className="top-divider"/> 全国47都道府県</div></header>
     {demoMode&&<div className="demo-banner" role="status"><strong>実データは未収集です</strong><span>表示される店舗は架空の動作確認用データです。期間を指定しても、過去の実店舗の閉店状況は検索できません。</span></div>}
-    {!demoMode&&<div className="demo-banner data-banner" role="status"><strong>OpenPOI 観測データ</strong><span>{health?.latest_snapshot?`最終取得 ${date(health.latest_snapshot)} / ${health.prefecture_count}都道府県・${health.store_count.toLocaleString()}店舗。初回取得だけでは閉店候補は判定できません。`: '初回の全国店舗データを準備しています。'} OpenPOIの掲載範囲は全実店舗の網羅を保証しません。</span></div>}
+    {!demoMode&&<div className="demo-banner data-banner" role="status"><strong>OpenPOI 観測データ</strong><span>{health?.latest_snapshot?`最終取得 ${date(health.latest_snapshot)} / ${prefecture||'全国'} ${health.store_count.toLocaleString()}店舗（FamilyMart ${health.brands.FAMILY_MART}・LAWSON ${health.brands.LAWSON}・セブン-イレブン ${health.brands.SEVEN_ELEVEN}）。初回取得だけでは閉店候補は判定できません。`: '初回の全国店舗データを準備しています。'} OpenPOIの掲載範囲は全実店舗の網羅を保証しません。</span></div>}
     <div className="filterbar">
       <div className="brand-filter" role="group" aria-label="ブランド"><span className="filter-label">ブランド</span><div className="brand-options"><label><input type="checkbox" checked={selectedBrands.includes('FAMILY_MART')} onChange={()=>toggleBrand('FAMILY_MART')}/> FamilyMart</label><label><input type="checkbox" checked={selectedBrands.includes('LAWSON')} onChange={()=>toggleBrand('LAWSON')}/> LAWSON</label></div></div>
       <label>状態<select aria-label="状態" value={status} onChange={change(setStatus)}><option value="CLOSED_CONFIRMED">閉店確認済み</option><option value="CLOSED_BOTH">確認済み＋可能性あり</option><option value="CLOSED_SUSPECTED">閉店の可能性</option><option value="MISSING">消失候補</option></select></label>
