@@ -133,6 +133,17 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(len(state['events']),0)
         self.assertEqual(len(state['runs']),3)
 
+    def test_same_brand_shops_at_one_address_keep_identity(self):
+        rows=[RawStore('ファミリーマート ルクア大阪店','大阪府大阪市北区梅田3-1-3',34.7017,135.4964,prefecture='大阪府'),
+              RawStore('ファミリーマート 大阪ステーションシティ店','大阪府大阪市北区梅田3-1-3',34.7017,135.4964,prefecture='大阪府')]
+        state=new_state(); source=InlineSource(rows)
+        apply_snapshot(state,source,'first','2026-10-01T00:00:00Z',prefecture='大阪府')
+        again=apply_snapshot(state,source,'second','2026-10-02T00:00:00Z',prefecture='大阪府')
+        self.assertEqual(again['metadata']['matched'],2)
+        self.assertEqual(again['metadata']['new'],0)
+        self.assertEqual(again['metadata']['missing'],0)
+        self.assertEqual(len(state['events']),0)
+
     def test_large_source_drop_aborts_without_mutating_state(self):
         class GuardedSource(InlineSource):
             guard_coverage=True

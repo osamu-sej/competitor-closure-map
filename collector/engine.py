@@ -82,8 +82,13 @@ def apply_snapshot(state: dict, source, snapshot_key: str, observed_at: str, mis
         possible = by_address.get((family, address), []) + nearby if address else nearby
         candidates = [store for store in {s["id"]: s for s in possible}.values()
                       if store["id"] not in observed_ids and store["source"] == raw.source and matches(raw, store, family)]
-        # Ambiguous identity is left separate rather than merging automatically.
-        store = candidates[0] if len(candidates) == 1 else None
+        # A mall or station can contain multiple same-brand shops with the same
+        # normalized address. Resolve an exact name and nearby position first;
+        # address-only matching must remain unique.
+        exact = [store for store in candidates
+                 if store["normalized_name"] == normalize_name(raw.name)
+                 and distance_m(raw.lat, raw.lng, store["lat"], store["lng"]) <= 30]
+        store = exact[0] if len(exact) == 1 else candidates[0] if len(candidates) == 1 else None
         if store:
             counts["matched"] += 1
             if store["current_presence"] != "PRESENT":
