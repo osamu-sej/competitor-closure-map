@@ -2,7 +2,8 @@ import 'server-only';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Pool } from 'pg';
-import type { Closure, Filters, Store } from './types';
+import type { Closure, Filters, Store, StoreMapPoint } from './types';
+import type { StoreFilters } from './store-filters';
 
 const dbMode = process.env.DATA_MODE === 'database';
 const pool = dbMode ? new Pool({connectionString:process.env.DATABASE_URL, max:4}) : null;
@@ -17,6 +18,60 @@ async function fixtureState(): Promise<State> {
   }
 }
 function parseNumber(v:unknown): number|null { return v == null ? null : Number(v); }
+function escapeLike(value:string) {return `%${value.replace(/[\\%_]/g,'\\$&')}%`;}
+function currentFixtureStores(state:State, filters:StoreFilters):Store[] {
+  return state.stores.filter(store=>store.current_presence==='PRESENT'
+    &&filters.brands.includes(store.brand_family)
+    &&(!filters.prefecture||store.prefecture===filters.prefecture)
+    &&(!filters.municipality||store.city.includes(filters.municipality))
+    &&(!filters.q||`${store.canonical_name} ${store.address}`.includes(filters.q)))
+    .sort((a,b)=>a.prefecture.localeCompare(b.prefecture,'ja')||a.city.localeCompare(b.city,'ja')||a.canonical_name.localeCompare(b.canonical_name,'ja'));
+}
+export async function listCurrentStores(filters:StoreFilters):Promise<{items:Store[];total:number}> {
+  if(!filters.brands.length)return {items:[],total:0};
+  if(!pool){const all=currentFixtureStores(await fixtureState(),filters);return {items:all.slice(filters.page*100,(filters.page+1)*100),total:all.length};}
+  const values:unknown[]=[filters.brands];
+  const predicates=[`current_presence='PRESENT'`,`brand_family=any($1::text[])`];
+  if(filters.prefecture){values.push(filters.prefecture);predicates.push(`prefecture=$${values.length}`);}
+  if(filters.municipality){values.push(escapeLike(filters.municipality));predicates.push(`city ilike $${values.length} escape '\\'`);}
+  if(filters.q){values.push(escapeLike(filters.q));predicates.push(`(canonical_name ilike $${values.length} escape '\\' or address ilike $${values.length} escape '\\')`);}
+  const where=predicates.join(' and ');
+  const count=await pool.query(`select count(*)::integer as total from stores where ${where}`,values);
+  values.push(filters.page*100);
+  const rows=await pool.query(`select id,brand_family,canonical_name,address,prefecture,city,lat,lng,current_presence from stores where ${where} order by prefecture,city,canonical_name,id limit 100 offset $${values.length}`,values);
+  return {items:rows.rows,total:count.rows[0].total};
+}
+export async function getCurrentStore(id:string):Promise<Store|null> {
+  if(!pool)return (await fixtureState()).stores.find(store=>store.id===id&&store.current_presence==='PRESENT')??null;
+  const rows=await pool.query(`select id,brand_family,canonical_name,address,prefecture,city,lat,lng,current_presence from stores where id=$1 and current_presence='PRESENT'`,[id]);
+  return rows.rows[0]??null;
+}
+export async function listStoreMapPoints(filters:StoreFilters,bbox:[number,number,number,number],zoom:number):Promise<{points:StoreMapPoint[];truncated:boolean}> {
+  if(!filters.brands.length)return {points:[],truncated:false};
+  const step=Math.max(0.00005,360/2**zoom*80/512);
+  if(!pool){
+    const stores=currentFixtureStores(await fixtureState(),filters)
+      .filter(store=>store.lng>=bbox[0]&&store.lat>=bbox[1]&&store.lng<=bbox[2]&&store.lat<=bbox[3]);
+    const grouped=new Map<string,Store[]>();
+    for(const store of stores){const key=`${store.brand_family}:${Math.floor(store.lng/step)}:${Math.floor(store.lat/step)}`;grouped.set(key,[...(grouped.get(key)??[]),store]);}
+    const points=[...grouped.values()].map(group=>({brand_family:group[0].brand_family,lat:group.reduce((sum,s)=>sum+s.lat,0)/group.length,lng:group.reduce((sum,s)=>sum+s.lng,0)/group.length,count:group.length,id:group.length===1?group[0].id:null,canonical_name:group.length===1?group[0].canonical_name:null}));
+    return {points:points.slice(0,1200),truncated:points.length>1200};
+  }
+  const values:unknown[]=[filters.brands,...bbox,step];
+  const extra:string[]=[];
+  if(filters.prefecture){values.push(filters.prefecture);extra.push(`prefecture=$${values.length}`);}
+  if(filters.municipality){values.push(escapeLike(filters.municipality));extra.push(`city ilike $${values.length} escape '\\'`);}
+  if(filters.q){values.push(escapeLike(filters.q));extra.push(`(canonical_name ilike $${values.length} escape '\\' or address ilike $${values.length} escape '\\')`);}
+  const rows=await pool.query(`with visible as (
+      select id,brand_family,canonical_name,lat,lng,floor(lng/$6::double precision) as x,floor(lat/$6::double precision) as y
+      from stores where current_presence='PRESENT' and brand_family=any($1::text[])
+        and lng between $2 and $4 and lat between $3 and $5${extra.length?` and ${extra.join(' and ')}`:''}
+    ) select brand_family,avg(lat)::double precision as lat,avg(lng)::double precision as lng,
+      count(*)::integer as count,case when count(*)=1 then min(id::text) else null end as id,
+      case when count(*)=1 then min(canonical_name) else null end as canonical_name
+      from visible group by brand_family,x,y order by count desc limit 1201`,values);
+  return {points:rows.rows.slice(0,1200),truncated:rows.rows.length>1200};
+}
 function fixtureClosure(state:State, event:Record<string,unknown>):Closure {
   const store = state.stores.find(s=>s.id===event.store_id)!;
   const nearest = state.stores.find(s=>s.id===event.nearest_seven_store_id) ?? null;

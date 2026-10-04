@@ -1,8 +1,10 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import MapPanel from './MapPanel';
+import StoreExplorer from './StoreExplorer';
 import type { Closure } from '../lib/types';
 import { prefectures } from '../lib/prefectures';
+import packageInfo from '../../../package.json';
 
 const labels:Record<string,string>={CLOSED_CONFIRMED:'閉店確認済み',CLOSED_SUSPECTED:'閉店の可能性',MISSING:'消失候補',REOPENED:'再出現'};
 const statusDescriptions:Record<string,string>={
@@ -13,6 +15,7 @@ const statusDescriptions:Record<string,string>={
 };
 const date=(value?:string|null)=>value?new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value)):'未確認';
 export default function Dashboard(){
+  const [storeMode,setStoreMode]=useState(process.env.NEXT_PUBLIC_DATA_MODE==='database');
   const [status,setStatus]=useState('CLOSED_CONFIRMED');const [selectedBrands,setSelectedBrands]=useState(['FAMILY_MART','LAWSON']);const [distance,setDistance]=useState(100);
   const [prefecture,setPrefecture]=useState('');const [municipality,setMunicipality]=useState('');const [from,setFrom]=useState('');const [to,setTo]=useState('');
   const [health,setHealth]=useState<{latest_snapshot:string|null;snapshot_count:number;prefecture_count:number;store_count:number;brands:Record<string,number>}|null>(null);
@@ -29,9 +32,11 @@ export default function Dashboard(){
   const change=(fn:(value:string)=>void)=>(event:React.ChangeEvent<HTMLSelectElement|HTMLInputElement>)=>{fn(event.target.value);setPage(0);};
   const demoMode=process.env.NEXT_PUBLIC_DATA_MODE!=='database';
   return <main className={'dashboard'+(demoMode?' demo-mode':' data-mode')}>
-    <header className="topbar"><div className="brandmark"><div className="brand-icon">↗</div><div><h1>競合閉店MAP</h1><p>全国 / 店舗マスタ差分モニター</p></div></div><div className="top-note"><span className="live-dot"/> {demoMode?'実データ未接続':'実データ'} <span className="top-divider"/> 全国47都道府県</div></header>
+    <header className="topbar"><div className="brandmark"><div className="brand-icon">↗</div><div><h1>競合閉店MAP <a className="version-link" href="/api/version" title="バージョンとデプロイコミット">v{packageInfo.version}</a></h1><p>全国 / 店舗マスタ差分モニター</p></div></div><div className="top-note"><span className="live-dot"/> {demoMode?'実データ未接続':'実データ'} <span className="top-divider"/> 全国47都道府県</div></header>
     {demoMode&&<div className="demo-banner" role="status"><strong>実データは未収集です</strong><span>表示される店舗は架空の動作確認用データです。期間を指定しても、過去の実店舗の閉店状況は検索できません。</span></div>}
     {!demoMode&&<div className="demo-banner data-banner" role="status"><strong>部分収録 / OpenPOI</strong><span>{health?.latest_snapshot?`最終取得 ${date(health.latest_snapshot)} / ${prefecture||'全国'} ${health.store_count.toLocaleString()}件（FamilyMart ${health.brands.FAMILY_MART}・LAWSON ${health.brands.LAWSON}・セブン-イレブン ${health.brands.SEVEN_ELEVEN}）。`: '初回の全国観測データを準備しています。'} 公式公表の全国約5.3万店に対し一部のみ収録。最寄りセブンと距離は収録店内の暫定値です。<a href="https://github.com/osamu-sej/competitor-closure-map/blob/main/docs/coverage-audit-2026-10-04.md" target="_blank" rel="noreferrer">収録状況と出典 ↗</a></span></div>}
+    <div className="view-switch" role="group" aria-label="表示切替"><button type="button" className={storeMode?'active':''} onClick={()=>setStoreMode(true)}>収録店舗マップ</button><button type="button" className={!storeMode?'active':''} onClick={()=>setStoreMode(false)}>閉店・消失シグナル</button></div>
+    {storeMode?<StoreExplorer prefecture={prefecture} setPrefecture={setPrefecture}/>:<>
     <div className="filterbar">
       <div className="brand-filter" role="group" aria-label="ブランド"><span className="filter-label">ブランド</span><div className="brand-options"><label><input type="checkbox" checked={selectedBrands.includes('FAMILY_MART')} onChange={()=>toggleBrand('FAMILY_MART')}/> FamilyMart</label><label><input type="checkbox" checked={selectedBrands.includes('LAWSON')} onChange={()=>toggleBrand('LAWSON')}/> LAWSON</label></div></div>
       <label>状態<select aria-label="状態" value={status} onChange={change(setStatus)}><option value="CLOSED_CONFIRMED">閉店確認済み</option><option value="CLOSED_BOTH">確認済み＋可能性あり</option><option value="CLOSED_SUSPECTED">閉店の可能性</option><option value="MISSING">消失候補</option></select></label>
@@ -47,6 +52,7 @@ export default function Dashboard(){
       {total>100&&<div className="pagination"><button disabled={page===0} onClick={()=>setPage(page-1)}>前へ</button><span>{page+1} / {Math.ceil(total/100)}</span><button disabled={(page+1)*100>=total} onClick={()=>setPage(page+1)}>次へ</button></div>}
     </aside></div>
     {selected&&<div className="detail-backdrop" onClick={()=>setSelectedId(null)}><section className="detail-panel" role="dialog" aria-label="店舗詳細" onClick={event=>event.stopPropagation()}><button className="close" aria-label="詳細を閉じる" onClick={()=>setSelectedId(null)}>×</button><span className="eyebrow">STORE DETAIL</span><h2>{selected.store.canonical_name}</h2><div className="detail-tags"><span className="brand-badge">{selected.store.brand_family==='LAWSON'?'LAWSON':'FamilyMart'}</span><span className={`status-badge ${selected.status==='CLOSED_CONFIRMED'?'confirmed':''}`}>{labels[selected.status]??selected.status}</span><span>確度 {selected.confidence}</span></div><div className="detail-scroll"><h3>閉店・消失情報</h3><dl><dt>閉店日</dt><dd>{date(selected.closure_date)}</dd><dt>検知日</dt><dd>{date(selected.detected_at)}</dd><dt>最終確認</dt><dd>{date(selected.last_seen_at)}</dd><dt>理由</dt><dd>{selected.reason??'未確認'}</dd></dl><h3>閉店前の店舗情報</h3><dl><dt>当時の店舗名</dt><dd>{selected.last_observation.observed_name}</dd><dt>住所</dt><dd>{selected.last_observation.observed_address}</dd><dt>位置</dt><dd>{selected.last_observation.lat.toFixed(6)}, {selected.last_observation.lng.toFixed(6)}</dd><dt>ソース</dt><dd>{selected.last_observation.source}</dd><dt>観測日</dt><dd>{date(selected.last_observation.observed_at)}</dd>{selected.last_observation.source_category&&<><dt>分類</dt><dd>{selected.last_observation.source_category}</dd></>}</dl><h3>収録店内の最寄りセブン-イレブン</h3><div className="seven-box"><strong>{selected.nearest_seven?.canonical_name??'未取得'}</strong><p>{selected.nearest_seven?.address}</p><b>{selected.distance_m?.toFixed(1)??'—'}m</b> ・ 100m基準で{selected.within_100m?'範囲内':'範囲外'}</div><h3>根拠</h3>{detail?.evidence?.length?detail.evidence.map(e=><div key={e.id} className="evidence"><b>{e.title}</b><span>{e.evidence_type} · {e.evidence_date??'日付不明'}</span><p>{e.summary}</p>{e.source_ref&&<a href={e.source_ref} target="_blank" rel="noreferrer">参照先 ↗</a>}</div>):<p className="muted">根拠は未登録です。消失だけでは閉店を意味しません。</p>}</div></section></div>}
+    </>}
     <footer>消失は閉店確定を意味しません。{demoMode?'デモデータは架空の店舗・根拠です。':''} POI: <a href="https://docs.openpoiapi.com/" target="_blank" rel="noreferrer">OpenPOI API</a> / Overture Maps · 地図: OpenFreeMap / OpenStreetMap contributors</footer>
   </main>;
 }
