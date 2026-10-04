@@ -19,53 +19,85 @@ async function fixtureState(): Promise<State> {
 }
 function parseNumber(v:unknown): number|null { return v == null ? null : Number(v); }
 function escapeLike(value:string) {return `%${value.replace(/[\\%_]/g,'\\$&')}%`;}
-function currentFixtureStores(state:State, filters:StoreFilters):Store[] {
-  return state.stores.filter(store=>store.current_presence==='PRESENT'
-    &&filters.brands.includes(store.brand_family)
+function historical(filters:StoreFilters):boolean {return Boolean(filters.from||filters.to);}
+function observationDay(value:string):string {return new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value));}
+function fixtureStores(state:State, filters:StoreFilters):Store[] {
+  const candidates=historical(filters)?[...state.observations]
+    .filter(o=>{const day=observationDay(String(o.observed_at));return (!filters.from||day>=filters.from)&&(!filters.to||day<=filters.to);})
+    .sort((a,b)=>String(b.observed_at).localeCompare(String(a.observed_at)))
+    .reduce((found,observation)=>{
+      const id=String(observation.store_id);
+      if(!found.has(id)){
+        const store=state.stores.find(item=>item.id===id);
+        if(store)found.set(id,{...store,canonical_name:String(observation.observed_name),address:String(observation.observed_address),lat:Number(observation.lat),lng:Number(observation.lng),observed_at:String(observation.observed_at)});
+      }
+      return found;
+    },new Map<string,Store>()):null;
+  return (candidates?[...candidates.values()]:state.stores.filter(store=>store.current_presence==='PRESENT')).filter(store=>
+    filters.brands.includes(store.brand_family)
     &&(!filters.prefecture||store.prefecture===filters.prefecture)
     &&(!filters.municipality||store.city.includes(filters.municipality))
     &&(!filters.q||`${store.canonical_name} ${store.address}`.includes(filters.q)))
     .sort((a,b)=>a.prefecture.localeCompare(b.prefecture,'ja')||a.city.localeCompare(b.city,'ja')||a.canonical_name.localeCompare(b.canonical_name,'ja'));
 }
+function storeScope(filters:StoreFilters,values:unknown[]) {
+  const past=historical(filters);
+  let cte='';
+  let from='stores s';
+  let name='s.canonical_name',address='s.address',lat='s.lat',lng='s.lng';
+  if(past){
+    const dates:string[]=[];
+    if(filters.from){values.push(filters.from);dates.push(`o.observed_at >= ($${values.length}::date::timestamp at time zone 'Asia/Tokyo')`);}
+    if(filters.to){values.push(filters.to);dates.push(`o.observed_at < (($${values.length}::date + 1)::timestamp at time zone 'Asia/Tokyo')`);}
+    cte=`with observed as (select distinct on (o.store_id) o.store_id,o.observed_name,o.observed_address,o.lat,o.lng,o.observed_at from store_observations o where ${dates.join(' and ')} order by o.store_id,o.observed_at desc,o.id desc)`;
+    from='stores s join observed o on o.store_id=s.id';
+    name='o.observed_name';address='o.observed_address';lat='o.lat';lng='o.lng';
+  }
+  const predicates=[`s.brand_family=any($1::text[])`];
+  if(!past)predicates.push(`s.current_presence='PRESENT'`);
+  if(filters.prefecture){values.push(filters.prefecture);predicates.push(`s.prefecture=$${values.length}`);}
+  if(filters.municipality){values.push(escapeLike(filters.municipality));predicates.push(`s.city ilike $${values.length} escape '\\'`);}
+  if(filters.q){values.push(escapeLike(filters.q));predicates.push(`(${name} ilike $${values.length} escape '\\' or ${address} ilike $${values.length} escape '\\')`);}
+  return {cte,from,name,address,lat,lng,predicates,past};
+}
 export async function listCurrentStores(filters:StoreFilters):Promise<{items:Store[];total:number}> {
   if(!filters.brands.length)return {items:[],total:0};
-  if(!pool){const all=currentFixtureStores(await fixtureState(),filters);return {items:all.slice(filters.page*100,(filters.page+1)*100),total:all.length};}
+  if(!pool){const all=fixtureStores(await fixtureState(),filters);return {items:all.slice(filters.page*100,(filters.page+1)*100),total:all.length};}
   const values:unknown[]=[filters.brands];
-  const predicates=[`current_presence='PRESENT'`,`brand_family=any($1::text[])`];
-  if(filters.prefecture){values.push(filters.prefecture);predicates.push(`prefecture=$${values.length}`);}
-  if(filters.municipality){values.push(escapeLike(filters.municipality));predicates.push(`city ilike $${values.length} escape '\\'`);}
-  if(filters.q){values.push(escapeLike(filters.q));predicates.push(`(canonical_name ilike $${values.length} escape '\\' or address ilike $${values.length} escape '\\')`);}
-  const where=predicates.join(' and ');
-  const count=await pool.query(`select count(*)::integer as total from stores where ${where}`,values);
+  const scope=storeScope(filters,values);
+  const where=scope.predicates.join(' and ');
+  const count=await pool.query(`${scope.cte} select count(*)::integer as total from ${scope.from} where ${where}`,values);
   values.push(filters.page*100);
-  const rows=await pool.query(`select id,brand_family,canonical_name,address,prefecture,city,lat,lng,current_presence from stores where ${where} order by prefecture,city,canonical_name,id limit 100 offset $${values.length}`,values);
+  const rows=await pool.query(`${scope.cte} select s.id,s.brand_family,${scope.name} as canonical_name,${scope.address} as address,s.prefecture,s.city,${scope.lat} as lat,${scope.lng} as lng,s.current_presence${scope.past?',o.observed_at':''} from ${scope.from} where ${where} order by s.prefecture,s.city,${scope.name},s.id limit 100 offset $${values.length}`,values);
   return {items:rows.rows,total:count.rows[0].total};
 }
-export async function getCurrentStore(id:string):Promise<Store|null> {
-  if(!pool)return (await fixtureState()).stores.find(store=>store.id===id&&store.current_presence==='PRESENT')??null;
-  const rows=await pool.query(`select id,brand_family,canonical_name,address,prefecture,city,lat,lng,current_presence from stores where id=$1 and current_presence='PRESENT'`,[id]);
+export async function getStore(id:string,filters:StoreFilters):Promise<Store|null> {
+  if(!pool)return fixtureStores(await fixtureState(),filters).find(store=>store.id===id)??null;
+  const values:unknown[]=[filters.brands];
+  const scope=storeScope(filters,values);
+  values.push(id);
+  const rows=await pool.query(`${scope.cte} select s.id,s.brand_family,${scope.name} as canonical_name,${scope.address} as address,s.prefecture,s.city,${scope.lat} as lat,${scope.lng} as lng,s.current_presence${scope.past?',o.observed_at':''} from ${scope.from} where ${scope.predicates.join(' and ')} and s.id=$${values.length}`,values);
   return rows.rows[0]??null;
 }
 export async function listStoreMapPoints(filters:StoreFilters,bbox:[number,number,number,number],zoom:number):Promise<{points:StoreMapPoint[];truncated:boolean}> {
   if(!filters.brands.length)return {points:[],truncated:false};
   const step=Math.max(0.00005,360/2**zoom*80/512);
   if(!pool){
-    const stores=currentFixtureStores(await fixtureState(),filters)
+    const stores=fixtureStores(await fixtureState(),filters)
       .filter(store=>store.lng>=bbox[0]&&store.lat>=bbox[1]&&store.lng<=bbox[2]&&store.lat<=bbox[3]);
     const grouped=new Map<string,Store[]>();
     for(const store of stores){const key=`${Math.floor(store.lng/step)}:${Math.floor(store.lat/step)}`;grouped.set(key,[...(grouped.get(key)??[]),store]);}
     const points=[...grouped.values()].map(group=>({brand_family:group.every(store=>store.brand_family===group[0].brand_family)?group[0].brand_family:'MIXED',lat:group.reduce((sum,s)=>sum+s.lat,0)/group.length,lng:group.reduce((sum,s)=>sum+s.lng,0)/group.length,count:group.length,id:group.length===1?group[0].id:null,canonical_name:group.length===1?group[0].canonical_name:null}));
     return {points:points.slice(0,1200),truncated:points.length>1200};
   }
-  const values:unknown[]=[filters.brands,...bbox,step];
-  const extra:string[]=[];
-  if(filters.prefecture){values.push(filters.prefecture);extra.push(`prefecture=$${values.length}`);}
-  if(filters.municipality){values.push(escapeLike(filters.municipality));extra.push(`city ilike $${values.length} escape '\\'`);}
-  if(filters.q){values.push(escapeLike(filters.q));extra.push(`(canonical_name ilike $${values.length} escape '\\' or address ilike $${values.length} escape '\\')`);}
-  const rows=await pool.query(`with visible as (
-      select id,brand_family,canonical_name,lat,lng,floor(lng/$6::double precision) as x,floor(lat/$6::double precision) as y
-      from stores where current_presence='PRESENT' and brand_family=any($1::text[])
-        and lng between $2 and $4 and lat between $3 and $5${extra.length?` and ${extra.join(' and ')}`:''}
+  const values:unknown[]=[filters.brands];
+  const scope=storeScope(filters,values);
+  values.push(...bbox);const [west,south,east,north]=[values.length-3,values.length-2,values.length-1,values.length];
+  values.push(step);const grid=values.length;
+  const rows=await pool.query(`${scope.cte?`${scope.cte},`:'with'} visible as (
+      select s.id,s.brand_family,${scope.name} as canonical_name,${scope.lat} as lat,${scope.lng} as lng,floor(${scope.lng}/$${grid}::double precision) as x,floor(${scope.lat}/$${grid}::double precision) as y
+      from ${scope.from} where ${scope.predicates.join(' and ')}
+        and ${scope.lng} between $${west} and $${east} and ${scope.lat} between $${south} and $${north}
     ) select case when count(distinct brand_family)=1 then min(brand_family) else 'MIXED' end as brand_family,
       avg(lat)::double precision as lat,avg(lng)::double precision as lng,
       count(*)::integer as count,case when count(*)=1 then min(id::text) else null end as id,

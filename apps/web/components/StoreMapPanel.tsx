@@ -6,7 +6,7 @@ import type { Store, StoreMapPoint } from '../lib/types';
 const logos:Record<string,string>={FAMILY_MART:'/brand-logos/familymart.svg',LAWSON:'/brand-logos/lawson.svg',SEVEN_ELEVEN:'/brand-logos/seven-eleven.svg'};
 
 type Extent={west:number;south:number;east:number;north:number};
-export default function StoreMapPanel({brands,prefecture,municipality,q,extent,selected,onSelect}:{brands:string[];prefecture:string;municipality:string;q:string;extent:Extent|null;selected:Store|null;onSelect:(id:string)=>void}) {
+export default function StoreMapPanel({brands,prefecture,municipality,q,from,to,extent,selected,onSelect}:{brands:string[];prefecture:string;municipality:string;q:string;from:string;to:string;extent:Extent|null;selected:Store|null;onSelect:(id:string)=>void}) {
   const container=useRef<HTMLDivElement>(null);
   const map=useRef<MapType|null>(null);
   const markers=useRef<Marker[]>([]);
@@ -49,15 +49,15 @@ export default function StoreMapPanel({brands,prefecture,municipality,q,extent,s
       const bounds=instance.getBounds();
       const bbox=[bounds.getWest(),bounds.getSouth(),bounds.getEast(),bounds.getNorth()]
         .map((value,index)=>index%2===0?Math.max(-180,Math.min(180,value)):Math.max(-90,Math.min(90,value)));
-      const params=new URLSearchParams({bbox:bbox.join(','),zoom:String(instance.getZoom()),brands:brands.join(','),prefecture,municipality,q});
+      const params=new URLSearchParams({bbox:bbox.join(','),zoom:String(instance.getZoom()),brands:brands.join(','),prefecture,municipality,q,from,to});
       fetch(`/api/stores/map?${params}`,{signal:controller.signal})
-        .then(async response=>{if(!response.ok)throw new Error('地図の店舗を取得できません。');return response.json();})
+        .then(async response=>{if(!response.ok)throw new Error((await response.json()).error||'地図の店舗を取得できません。');return response.json();})
         .then(data=>{setPoints(data.points);setTruncated(data.truncated);setError('');})
         .catch(err=>{if(err.name!=='AbortError')setError(err.message);});
     };
     instance.on('moveend',load);load();
     return()=>{controller?.abort();instance.off('moveend',load);};
-  },[ready,brands,prefecture,municipality,q]);
+  },[ready,brands,prefecture,municipality,q,from,to]);
   useEffect(()=>{
     const instance=map.current;
     if(!ready||!instance)return;

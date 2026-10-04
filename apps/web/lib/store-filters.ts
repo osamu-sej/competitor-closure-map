@@ -1,18 +1,29 @@
 import { prefectures } from './prefectures';
 
 export const storeBrands = ['FAMILY_MART', 'LAWSON', 'SEVEN_ELEVEN'];
-export type StoreFilters = { brands:string[]; prefecture:string; municipality:string; q:string; page:number };
+export type StoreFilters = { brands:string[]; prefecture:string; municipality:string; q:string; from:string; to:string; page:number };
+export class StoreFilterError extends Error {}
+
+function dateParam(value:string):string {
+  if(value && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`)) || new Date(`${value}T00:00:00Z`).toISOString().slice(0,10)!==value))
+    throw new StoreFilterError('日付はYYYY-MM-DD形式で指定してください。');
+  return value;
+}
 
 export function parseStoreFilters(params:URLSearchParams):StoreFilters {
   const requested=params.get('brands');
   const brands=requested===null ? storeBrands : [...new Set(requested.split(',').filter(value=>storeBrands.includes(value)))];
   const prefecture=params.get('prefecture')??'';
   const rawPage=Number(params.get('page')??0);
+  const from=dateParam(params.get('from')??'');
+  const to=dateParam(params.get('to')??'');
+  if(from&&to&&from>to)throw new StoreFilterError('期間の開始日は終了日以前にしてください。');
   return {
     brands,
     prefecture:prefectures.some(value=>value===prefecture)?prefecture:'',
     municipality:(params.get('municipality')??'').trim().slice(0,80),
     q:(params.get('q')??'').trim().slice(0,80),
+    from,to,
     page:Number.isInteger(rawPage)&&rawPage>=0?Math.min(rawPage,1000):0
   };
 }

@@ -1,4 +1,4 @@
-export type Store = {id:string;brand_family:string;canonical_name:string;address:string;prefecture:string;city:string;lat:number;lng:number;current_presence:string};
+export type Store = {id:string;brand_family:string;canonical_name:string;address:string;prefecture:string;city:string;lat:number;lng:number;current_presence:string;observed_at?:string};
 export type StoreMapPoint = {brand_family:string;lat:number;lng:number;count:number;id:string|null;canonical_name:string|null};
 export type Observation = {id:string;observed_name:string;observed_address:string;lat:number;lng:number;source:string;source_category?:string|null;source_business_type?:string|null;observed_at:string;attributions:string[]};
 export type Evidence = {id:string;evidence_type:string;title:string;source_ref?:string|null;evidence_date?:string|null;summary:string;supports_closure:boolean};
