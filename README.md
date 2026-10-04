@@ -4,7 +4,7 @@ FamilyMart 系・LAWSON 系の店舗スナップショットを時系列で比�
 
 fixture の店舗、住所、閉店根拠はすべて架空のデモデータです。実際の閉店情報として利用しないでください。
 
-Render に公開する場合は `render.yaml` の無料 Web Service 設定を使用します。DB のない公開版は `fixtures/demo_state.json` の架空データで起動します。
+Render の公開版は現在 `render.yaml` の無料 Web Service 設定で稼働しています。DB が未接続のため `fixtures/demo_state.json` の架空データだけを表示し、実店舗の収集・過去の閉店調査は行っていません。画面上部にもこの状態を明示します。
 
 ## アーキテクチャ
 
@@ -77,6 +77,8 @@ python3 -m collector set-status --event-id <UUID> --status RELOCATED --reason '�
 - `GET /api/map/events?bbox=minLng,minLat,maxLng,maxLat`: 表示領域のイベント。
 - `GET /api/health`: DB 疎通と最新成功 snapshot。
 
+画面の期間指定は、保存済みイベントを絞り込むだけです。指定した過去期間の店舗データを取得する機能ではありません。実際の閉店候補を検知するには、同じ範囲・データソースの店舗スナップショットを継続して保存し、差分を比較する必要があります。
+
 地図のスタイルは `NEXT_PUBLIC_MAP_STYLE_URL` で変更できます。既定は OpenFreeMap の Liberty style です。地図には一覧の競合店舗と、それぞれに紐づく最寄りのセブン-イレブンをロゴで表示します。競合ロゴの×は閉店・消失イベントを示します。同じセブンが複数イベントの最寄りでも、マーカーは1つにまとめます。店舗を選ぶと両店が見えるよう地図が移動し、破線と距離フィルターと同じ半径の円を描画します。距離は直線距離で、道路移動距離ではありません。画面の「状態の説明」から各ステータスの意味を確認できます。
 
 地図のブランド識別用ロゴは Wikimedia Commons の [セブン-イレブン](https://commons.wikimedia.org/wiki/File:7-eleven_logo.svg)、[FamilyMart](https://commons.wikimedia.org/wiki/File:FamilyMart_Logo_(2016-).svg)、[LAWSON](https://commons.wikimedia.org/wiki/File:Lawson_logo.svg) を同梱しています。各商標はそれぞれの権利者に帰属します。
@@ -94,7 +96,7 @@ UI テストはインストール済みの Google Chrome を使用します。Ch
 
 ## デプロイ
 
-任意の Next.js 対応環境で `npm ci && npm run build`、起動に `npm run start` を指定します。fixture モードでは起動前に `python3 -m collector build-fixture` が必要です。永続運用は Supabase/PostgreSQL を設定し、collector を**別のサーバー側ジョブ**として手動実行してください。スケジューラや配信先は未確定です。
+任意の Next.js 対応環境で `npm ci && npm run build`、起動に `npm run start` を指定します。fixture モードでは `data/fixture-state.json` がなければ同梱の `fixtures/demo_state.json` を読みます。永続運用には Supabase/PostgreSQL を設定し、collector を**別のサーバー側ジョブ**として実行してください。スケジューラや配信先は未確定です。
 
 ## Attribution / License
 
@@ -113,5 +115,5 @@ OpenPOI レコードの `licenses`、`attributions`、raw payload、取得時刻
 - 定義書の `OpenPOI` は `https://api.openpoiapi.com` のサービスを指すものとして公式仕様を確認しました。
 - 神奈川県を覆う bbox は近隣都県も含むため、返却された `prefecture` または住所で神奈川県に限定します。県境形状による厳密な行政界判定ではありません。
 - デモの根拠は架空です。実運用の根拠登録はサーバー側 CLI から行い、一般公開の書き込み API は設けません。
-- Supabase プロジェクトとデプロイ先が未指定のため、接続先固有の設定・本番公開は未実施です。
+- Render Web Service は公開済みですが、Supabase/PostgreSQL 接続先と定期収集ジョブは未設定です。
 - Web の DB 接続は Supabase client library ではなく、サーバー専用 PostgreSQL 接続を使用します。匿名クライアントのテーブル権限を付与せず、PostGIS クエリと RLS を一か所で扱うためです。

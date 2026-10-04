@@ -29,3 +29,9 @@
 .map-legend b{display:inline-grid;place-items:center;width:15px;height:15px;border-radius:50%;background:#e26038;color:white;line-height:1}
 @media(max-width:600px){.map-store-marker.closure{width:72px;height:32px}.map-store-marker.seven{width:38px;height:38px}.map-legend{top:10px;bottom:auto;right:10px;font-size:10px;padding:5px 7px}.map-legend img{width:29px;height:17px}.map-legend span:first-child img{width:20px;height:20px}}
 @media(max-width:600px){.map-panel.has-selection .map-legend{top:108px}}
+
+.demo-banner{min-height:56px;display:flex;align-items:center;gap:16px;padding:10px 25px;background:#fff3de;border-bottom:1px solid #edcd90;color:#68420b;font-size:12px;line-height:1.5}
+.demo-banner strong{white-space:nowrap;font-size:13px}
+.dashboard.demo-mode .content{height:calc(100vh - 239px)}
+@media(max-width:900px){.dashboard.demo-mode .content{height:auto}}
+@media(max-width:600px){.demo-banner{align-items:flex-start;flex-direction:column;gap:3px;padding:10px 24px}}
