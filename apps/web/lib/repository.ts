@@ -26,6 +26,7 @@ function fixtureClosure(state:State, event:Record<string,unknown>):Closure {
 function filtered(event:Closure, f:Filters):boolean {
   if (f.status === 'CLOSED_BOTH' ? !['CLOSED_CONFIRMED','CLOSED_SUSPECTED'].includes(event.status) : f.status !== 'ALL' && event.status !== f.status) return false;
   if (!f.brands.includes(event.store.brand_family)) return false;
+  if (f.prefecture && event.store.prefecture !== f.prefecture) return false;
   if (event.distance_m == null || event.distance_m > f.distance) return false;
   if (f.municipality && !event.store.city.includes(f.municipality)) return false;
   const date = event.closure_date ?? event.detected_at.slice(0,10);
@@ -50,6 +51,7 @@ export async function listClosures(f:Filters):Promise<{items:Closure[];total:num
   if (f.status === 'CLOSED_BOTH') predicates.push(`e.status in ('CLOSED_CONFIRMED','CLOSED_SUSPECTED')`);
   else if (f.status !== 'ALL') {values.push(f.status);predicates.push(`e.status = $${values.length}`);}
   values.push(f.brands);predicates.push(`s.brand_family = any($${values.length}::text[])`);
+  if (f.prefecture) {values.push(f.prefecture);predicates.push(`s.prefecture = $${values.length}`);}
   if (f.municipality) {values.push(`%${f.municipality.replace(/[\\%_]/g,'\\$&')}%`);predicates.push(`s.city ilike $${values.length} escape '\\'`);}
   if (f.from) {values.push(f.from);predicates.push(`coalesce(e.closure_date,e.detected_at::date) >= $${values.length}::date`);}
   if (f.to) {values.push(f.to);predicates.push(`coalesce(e.closure_date,e.detected_at::date) <= $${values.length}::date`);}
@@ -73,8 +75,9 @@ export async function getHistory(id:string) {
   return rows.rows;
 }
 export async function health() {
-  if (!pool) {const state=await fixtureState();return {ok:true,mode:'fixture',db:'not configured',latest_snapshot:state.runs.filter(r=>r.status==='succeeded').at(-1)?.finished_at??null};}
+  if (!pool) {const state=await fixtureState();return {ok:true,mode:'fixture',db:'not configured',latest_snapshot:state.runs.filter(r=>r.status==='succeeded').at(-1)?.finished_at??null,snapshot_count:state.runs.length,prefecture_count:1,store_count:state.stores.length};}
   await pool.query('select 1');
-  const result=await pool.query("select finished_at from snapshot_runs where status='succeeded' order by finished_at desc limit 1");
-  return {ok:true,mode:'database',db:'connected',latest_snapshot:result.rows[0]?.finished_at??null};
+  const result=await pool.query("select max(finished_at) as latest_snapshot,count(*)::integer as snapshot_count,count(distinct prefecture)::integer as prefecture_count from snapshot_runs where status='succeeded'");
+  const stores=await pool.query('select count(*)::integer as store_count from stores');
+  return {ok:true,mode:'database',db:'connected',...result.rows[0],store_count:stores.rows[0].store_count};
 }

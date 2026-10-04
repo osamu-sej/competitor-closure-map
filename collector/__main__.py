@@ -8,6 +8,7 @@ from .engine import add_evidence, add_event_evidence, apply_snapshot, new_state
 from .sources.csv_source import CsvSource
 from .sources.fixture import FixtureSource
 from .sources.openpoi import OpenPoiSource
+from .prefectures import PREFECTURES
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,8 +32,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("build-fixture")
+    sub.add_parser("migrate")
     snap = sub.add_parser("snapshot")
-    snap.add_argument("--prefecture", default="神奈川県")
+    snap.add_argument("--prefecture", help="都道府県名。OpenPOIの既定値は全国。")
     snap.add_argument("--source", choices=("openpoi", "fixture", "csv"), required=True)
     snap.add_argument("--file")
     snap.add_argument("--snapshot-key", required=True)
@@ -56,14 +58,22 @@ def main() -> None:
         state = build_fixture()
         print(json.dumps({"runs": len(state["runs"]), "events": len(state["events"]), "status": state["events"][0]["status"]}, ensure_ascii=False))
         return
-    if args.command == "snapshot" and args.prefecture != "神奈川県":
-        parser.error("MVP supports 神奈川県 only")
+    if args.command == "snapshot":
+        args.prefecture = args.prefecture or ("全国" if args.source == "openpoi" else "神奈川県")
+        if args.prefecture != "全国" and args.prefecture not in PREFECTURES:
+            parser.error("Unknown prefecture")
     if args.command == "snapshot" and args.source in ("fixture", "csv") and not args.file:
         parser.error("--file is required for fixture/csv")
     if not os.getenv("DATABASE_URL"):
         parser.error("DATABASE_URL is required; use build-fixture for offline demo")
     from .db import connect, load_state, save_state
     from .engine import utc_now
+    if args.command == "migrate":
+        with connect(os.environ["DATABASE_URL"]) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute((ROOT / "supabase" / "migrations" / "202610040001_initial.sql").read_text(encoding="utf-8"))
+        print(json.dumps({"status": "migrated"}))
+        return
     try:
         with connect(os.environ["DATABASE_URL"]) as connection:
             with connection.cursor() as cursor:
@@ -71,7 +81,17 @@ def main() -> None:
             state = load_state(connection)
             if args.command == "snapshot":
                 source = {"openpoi": lambda: OpenPoiSource(), "fixture": lambda: FixtureSource(args.file), "csv": lambda: CsvSource(args.file)}[args.source]()
-                run = apply_snapshot(state, source, args.snapshot_key, args.observed_at or utc_now(), int(os.getenv("MISSING_THRESHOLD", "2")))
+                prefectures = PREFECTURES if args.prefecture == "全国" else (args.prefecture,)
+                observed_at = args.observed_at or utc_now()
+                runs = []
+                for index, prefecture in enumerate(prefectures, 1):
+                    runs.append(apply_snapshot(state, source,
+                        f"{args.snapshot_key}:{prefecture}" if args.prefecture == "全国" else args.snapshot_key,
+                        observed_at, int(os.getenv("MISSING_THRESHOLD", "2")), prefecture))
+                    if index % 10 == 0 or index == len(prefectures):
+                        print(f"Normalized {index}/{len(prefectures)} prefectures", flush=True)
+                run = {"snapshot_key": args.snapshot_key, "prefectures": len(runs),
+                       "store_count": sum(r["store_count"] for r in runs), "requests": getattr(source, "requests", None)}
             elif args.command == "add-evidence":
                 if args.confirm and not args.supports_closure:
                     parser.error("--confirm requires --supports-closure")
@@ -90,8 +110,8 @@ def main() -> None:
                 with connect(os.environ["DATABASE_URL"]) as connection:
                     with connection.cursor() as cursor:
                         cursor.execute("""insert into snapshot_runs(id,snapshot_key,source,prefecture,started_at,finished_at,status,store_count,error_message,metadata)
-                          values (%s,%s,%s,'神奈川県',now(),now(),'failed',0,%s,'{}')""",
-                          (str(uuid4()),f"{args.snapshot_key}:failed:{uuid4()}",args.source,str(error)[:1000]))
+                          values (%s,%s,%s,%s,now(),now(),'failed',0,%s,'{}')""",
+                          (str(uuid4()),f"{args.snapshot_key}:failed:{uuid4()}",args.source,args.prefecture if args.prefecture != "全国" else "全国",str(error)[:1000]))
             except Exception:
                 pass
         raise

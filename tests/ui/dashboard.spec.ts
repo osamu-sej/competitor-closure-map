@@ -5,6 +5,10 @@ test('filters keep list and map aligned and detail uses last observation', async
   await expect(page.getByRole('status')).toContainText('実データは未収集です');
   await expect(page.getByRole('status')).toContainText('過去の実店舗の閉店状況は検索できません');
   await expect(page.locator('.result-card')).toHaveCount(1);
+  await page.getByLabel('都道府県').selectOption('東京都');
+  await expect(page.locator('.result-card')).toHaveCount(0);
+  await page.getByLabel('都道府県').selectOption('神奈川県');
+  await expect(page.locator('.result-card')).toHaveCount(1);
   await expect(page.locator('.map-store-marker.closure')).toHaveCount(1);
   await expect(page.locator('.map-store-marker.seven')).toHaveCount(1);
   await expect(page.locator('.map-store-marker.closure img')).toHaveAttribute('src','/brand-logos/lawson.svg');

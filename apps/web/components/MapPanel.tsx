@@ -55,7 +55,7 @@ export default function MapPanel({items,selected,distance,onSelect}:{items:Closu
     import('maplibre-gl').then(({Map,NavigationControl,setWorkerUrl})=>{
       if(disposed||!container.current) return;
       setWorkerUrl('/maplibre-gl-worker.mjs');
-      instance=new Map({container:container.current,style:process.env.NEXT_PUBLIC_MAP_STYLE_URL||'https://tiles.openfreemap.org/styles/liberty',center:[139.41,35.51],zoom:10.5});
+      instance=new Map({container:container.current,style:process.env.NEXT_PUBLIC_MAP_STYLE_URL||'https://tiles.openfreemap.org/styles/liberty',center:[137.5,37.0],zoom:4.5});
       map.current=instance;
       instance.addControl(new NavigationControl({showCompass:false}),'bottom-left');
       instance.on('load',()=>setReady(true));

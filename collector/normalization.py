@@ -4,6 +4,7 @@ import json
 import re
 import unicodedata
 from pathlib import Path
+from .prefectures import PREFECTURES
 
 
 ALIASES = json.loads((Path(__file__).parent / "brands.json").read_text())
@@ -31,5 +32,9 @@ def normalize_name(name: str) -> str:
 
 def normalize_address(address: str) -> str:
     value = unicodedata.normalize("NFKC", address).lower()
-    value = value.replace("神奈川県", "").replace("丁目", "-").replace("番地", "-").replace("番", "-").replace("号", "")
+    for prefecture in PREFECTURES:
+        if value.startswith(prefecture):
+            value = value[len(prefecture):]
+            break
+    value = value.replace("丁目", "-").replace("番地", "-").replace("番", "-").replace("号", "")
     return re.sub(r"[\s\u3000‐ー－-]+", "-", value).strip("-")

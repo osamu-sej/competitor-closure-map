@@ -12,6 +12,10 @@ services:
       - key: NODE_VERSION
         value: 24.18.1
       - key: DATA_MODE
-        value: fixture
+        value: database
       - key: NEXT_PUBLIC_DATA_MODE
-        value: fixture
+        value: database
+      - key: DATABASE_URL
+        fromDatabase:
+          name: competitor-closure-map-db
+          property: connectionString

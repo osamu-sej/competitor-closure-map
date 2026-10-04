@@ -3,7 +3,7 @@ create extension if not exists postgis;
 
 create table if not exists snapshot_runs (
   id uuid primary key, snapshot_key text not null unique, source text not null,
-  prefecture text not null check (prefecture = '神奈川県'),
+  prefecture text not null,
   started_at timestamptz not null, finished_at timestamptz,
   status text not null check (status in ('running','succeeded','failed')),
   store_count integer not null default 0, error_message text, metadata jsonb not null default '{}'
@@ -11,7 +11,7 @@ create table if not exists snapshot_runs (
 create table if not exists stores (
   id uuid primary key, brand_family text not null check (brand_family in ('FAMILY_MART','LAWSON','SEVEN_ELEVEN')),
   canonical_name text not null, normalized_name text not null, address text not null,
-  normalized_address text not null, prefecture text not null check (prefecture = '神奈川県'), city text not null,
+  normalized_address text not null, prefecture text not null, city text not null,
   lat double precision not null, lng double precision not null,
   location geography(Point,4326) generated always as (ST_SetSRID(ST_MakePoint(lng,lat),4326)::geography) stored,
   source text not null, source_store_id text, first_seen_at timestamptz not null,
@@ -76,7 +76,15 @@ alter table event_seven_neighbors enable row level security;
 alter table event_evidence enable row level security;
 alter table brand_aliases enable row level security;
 alter table app_state enable row level security;
-revoke all on all tables in schema public from anon, authenticated;
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke all on all tables in schema public from anon;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    revoke all on all tables in schema public from authenticated;
+  end if;
+end $$;
 
 create or replace function refresh_event_nearest(p_event_id uuid)
 returns void language plpgsql as $$

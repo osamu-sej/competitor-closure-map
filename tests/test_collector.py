@@ -83,5 +83,31 @@ class CollectorTests(unittest.TestCase):
         self.assertGreaterEqual(search.call_count,5)
         self.assertEqual(rows[0].licenses,['Apache-2.0'])
 
+    def test_prefecture_snapshots_do_not_mark_other_prefectures_missing(self):
+        kanagawa=[RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.6,prefecture='神奈川県')]
+        tokyo=[RawStore('ローソン 新宿店','東京都新宿区1',35.7,139.7,prefecture='東京都')]
+        class RegionalSource:
+            def __init__(self, rows): self.rows=rows
+            def fetch_stores(self, prefecture, family):
+                return [row for row in self.rows if row.prefecture==prefecture and brand_family(row.name)==family]
+        state=new_state()
+        source=RegionalSource(kanagawa+tokyo)
+        apply_snapshot(state,source,'kanagawa-1','2026-10-01T00:00:00Z',prefecture='神奈川県')
+        apply_snapshot(state,source,'tokyo-1','2026-10-01T00:00:00Z',prefecture='東京都')
+        apply_snapshot(state,RegionalSource(kanagawa),'kanagawa-2','2026-10-08T00:00:00Z',prefecture='神奈川県')
+        self.assertEqual(len(state['events']),0)
+        self.assertEqual(len(state['runs']),3)
+
+    def test_large_source_drop_aborts_without_mutating_state(self):
+        class GuardedSource(InlineSource):
+            guard_coverage=True
+        stores=[RawStore(f'ローソン 店舗{i}',f'神奈川県横浜市中区{i}',35.4+i/1000,139.4) for i in range(40)]
+        state=new_state()
+        apply_snapshot(state,GuardedSource(stores),'one','2026-10-01T00:00:00Z')
+        with self.assertRaisesRegex(RuntimeError,'coverage fell'):
+            apply_snapshot(state,GuardedSource(stores[:30]),'two','2026-10-08T00:00:00Z')
+        self.assertEqual(len(state['runs']),1)
+        self.assertEqual(len(state['events']),0)
+
 
 if __name__ == '__main__': unittest.main()

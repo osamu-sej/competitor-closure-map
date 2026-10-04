@@ -3,15 +3,20 @@ from __future__ import annotations
 import json
 import os
 import time
+from dataclasses import replace
 from urllib.parse import urlencode
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from collector.model import RawStore
-from collector.normalization import brand_family as detect_brand
+from collector.matching import distance_m
+from collector.normalization import brand_family as detect_brand, normalize_name
+from collector.prefectures import PREFECTURES
 from .base import StoreSource
 
 
-KANAGAWA_BBOX = (138.90, 35.12, 139.86, 35.68)
+# Includes the inhabited islands as well as the main islands of Japan.
+JAPAN_BBOX = (122.0, 20.0, 154.5, 46.1)
 KEYWORDS = {
     "FAMILY_MART": ["ファミリーマート", "ファミマ", "FamilyMart"],
     "LAWSON": ["ローソン", "LAWSON"],
@@ -21,18 +26,27 @@ KEYWORDS = {
 
 class OpenPoiSource(StoreSource):
     """Official /v1/search client; saturated leaves fail instead of silently truncating."""
-    require_nonempty_each_family = True
+    require_nonempty_each_family = False
+    guard_coverage = True
 
     def __init__(self, base_url: str | None = None, limit: int = 200, max_depth: int = 12):
         self.base_url = (base_url or os.getenv("OPENPOI_BASE_URL", "https://api.openpoiapi.com")).rstrip("/")
         self.limit = limit
         self.max_depth = max_depth
         self.requests = 0
+        self.cache: dict[str, list[RawStore]] = {}
 
     def _search(self, keyword: str, bbox: tuple[float, float, float, float]) -> list[dict]:
         query = urlencode({"q": keyword, "bbox": ",".join(map(str, bbox)), "limit": self.limit})
-        with urlopen(f"{self.base_url}/v1/search?{query}", timeout=30) as response:
-            body = json.load(response)
+        for attempt in range(4):
+            try:
+                with urlopen(f"{self.base_url}/v1/search?{query}", timeout=30) as response:
+                    body = json.load(response)
+                break
+            except (HTTPError, URLError, TimeoutError):
+                if attempt == 3:
+                    raise
+                time.sleep(2 ** attempt)
         self.requests += 1
         results = body.get("results")
         if not isinstance(results, list) or body.get("count") != len(results):
@@ -52,13 +66,22 @@ class OpenPoiSource(StoreSource):
         return [row for box in boxes for row in self._partition(keyword, box, depth + 1)]
 
     def fetch_stores(self, prefecture: str, brand_family: str) -> list[RawStore]:
-        if prefecture != "神奈川県":
-            raise ValueError("MVP supports 神奈川県 only")
+        if prefecture not in PREFECTURES:
+            raise ValueError(f"Unknown prefecture: {prefecture}")
+        if brand_family not in self.cache:
+            self.cache[brand_family] = self._fetch_family(brand_family)
+        return [store for store in self.cache[brand_family] if store.prefecture == prefecture]
+
+    def _fetch_family(self, brand_family: str) -> list[RawStore]:
         seen: set[tuple] = set()
         stores: list[RawStore] = []
+        by_name: dict[tuple[str, str], list[int]] = {}
         for keyword in KEYWORDS[brand_family]:
-            for row in self._partition(keyword, KANAGAWA_BBOX):
-                if row.get("prefecture") != prefecture and not str(row.get("address", "")).startswith(prefecture):
+            for row in self._partition(keyword, JAPAN_BBOX):
+                prefecture = row.get("prefecture")
+                if prefecture not in PREFECTURES:
+                    prefecture = next((name for name in PREFECTURES if str(row.get("address", "")).startswith(name)), None)
+                if prefecture is None:
                     continue
                 if detect_brand(row.get("name", "")) != brand_family:
                     continue
@@ -68,5 +91,27 @@ class OpenPoiSource(StoreSource):
                 if key in seen:
                     continue
                 seen.add(key)
+                name_key = (prefecture, normalize_name(row["name"]))
+                duplicate = next((index for index in by_name.get(name_key, []) if distance_m(stores[index].lat, stores[index].lng, row["lat"], row["lng"]) <= 30), None)
+                if duplicate is not None:
+                    old = stores[duplicate]
+                    records = old.raw_payload.get("records", [old.raw_payload])
+                    prefer_new = bool(row.get("address") and not old.address)
+                    stores[duplicate] = replace(old,
+                        name=row["name"] if prefer_new else old.name,
+                        address=row.get("address", "") if prefer_new else old.address,
+                        lat=row["lat"] if prefer_new else old.lat,
+                        lng=row["lng"] if prefer_new else old.lng,
+                        city=row.get("city", "") if prefer_new else old.city,
+                        source_category=row.get("category") if prefer_new else old.source_category,
+                        source_business_type=row.get("business_type") if prefer_new else old.source_business_type,
+                        licenses=list(dict.fromkeys(old.licenses + (row.get("licenses") or []))),
+                        attributions=list(dict.fromkeys(old.attributions + (row.get("attributions") or []))),
+                        raw_payload={"records": records + [row]})
+                    continue
+                by_name.setdefault(name_key, []).append(len(stores))
                 stores.append(RawStore(name=row["name"], address=row.get("address", ""), lat=row["lat"], lng=row["lng"], prefecture=prefecture, city=row.get("city", ""), source="openpoi", source_category=row.get("category"), source_business_type=row.get("business_type"), licenses=row.get("licenses") or [], attributions=row.get("attributions") or [], raw_payload=row))
+        if not stores:
+            raise RuntimeError(f"No {brand_family} stores found in Japan; refusing incomplete snapshot")
+        print(f"OpenPOI {brand_family}: {len(stores)} stores ({self.requests} requests total)", flush=True)
         return stores
