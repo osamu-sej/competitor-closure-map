@@ -16,6 +16,7 @@ FamilyMart 系・LAWSON 系・セブン-イレブンの店舗位置を OpenPOI �
 ## 構成
 
 - `collector/`: OpenPOI / CSV / fixture の収集、正規化、都道府県別差分、根拠・状態管理。
+- 観測履歴は正規化テーブルに保存し、差分計算用の最新状態だけを圧縮したチェックポイントとして保持します。
 - `supabase/migrations/`: PostgreSQL 18 + PostGIS のテーブル、RLS、距離計算関数。Supabase 以外の PostGIS 対応DBでも実行できます。
 - `apps/web/`: Next.js + MapLibre の読み取り専用APIと地図。ブランド複数選択、都道府県、状態、距離、期間、市区町村で絞り込みます。
 - `.github/workflows/snapshot.yml`: 毎週月曜12:00 JSTの全国 snapshot。手動実行も可能です。

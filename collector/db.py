@@ -1,5 +1,7 @@
 """Transactional PostgreSQL projection of the snapshot state."""
 import json
+import base64
+import zlib
 
 from .engine import new_state
 
@@ -13,7 +15,12 @@ def load_state(connection) -> dict:
     with connection.cursor() as cursor:
         cursor.execute("select state from app_state where singleton = true")
         row = cursor.fetchone()
-    return row[0] if row else new_state()
+    if not row:
+        return new_state()
+    value = row[0]
+    if value.get("encoding") == "zlib+base64":
+        return json.loads(zlib.decompress(base64.b64decode(value["payload"])))
+    return value
 
 
 def save_state(connection, state: dict) -> None:
@@ -58,4 +65,6 @@ def save_state(connection, state: dict) -> None:
                 {key: observation[key] for key in ("id", "store_id", "snapshot_run_id", "observed_at")}
                 for observation in latest.values()
             ]}
-            cur.execute("insert into app_state(singleton,state) values (true,%s::jsonb) on conflict(singleton) do update set state=excluded.state", (json.dumps(checkpoint),))
+            compressed = base64.b64encode(zlib.compress(json.dumps(checkpoint, ensure_ascii=False).encode("utf-8"), level=6)).decode("ascii")
+            packed = {"encoding": "zlib+base64", "payload": compressed}
+            cur.execute("insert into app_state(singleton,state) values (true,%s::jsonb) on conflict(singleton) do update set state=excluded.state", (json.dumps(packed),))
