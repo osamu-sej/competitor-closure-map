@@ -23,8 +23,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 330
     env:
+      STORAGE_MODE: ${{ vars.STORAGE_MODE || 'database' }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SHEETS_SPREADSHEET_ID: ${{ vars.SHEETS_SPREADSHEET_ID }}
       MANUAL_SNAPSHOT_KEY: ${{ inputs.snapshot_key }}
       PGSSLMODE: require
     steps:
@@ -33,15 +36,25 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install -r requirements.txt
-      - name: Validate database secret
-        run: test -n "$DATABASE_URL" && test -n "$BACKUP_ENCRYPTION_KEY"
+      - name: Validate storage configuration
+        run: |
+          if [ "$STORAGE_MODE" = database ]; then
+            test -n "$DATABASE_URL" && test -n "$BACKUP_ENCRYPTION_KEY"
+          elif [ "$STORAGE_MODE" = sheets ]; then
+            test -n "$GOOGLE_SERVICE_ACCOUNT_JSON" && test -n "$SHEETS_SPREADSHEET_ID"
+          else
+            echo "STORAGE_MODE must be database or sheets" >&2
+            exit 1
+          fi
       - name: Apply database migration
+        if: env.STORAGE_MODE == 'database'
         run: python -m collector migrate
       - name: Collect and compare all prefectures
         run: |
           SNAPSHOT_KEY="${MANUAL_SNAPSHOT_KEY:-openpoi-$(date -u +%G-W%V)}"
           python -m collector snapshot --source openpoi --prefecture 全国 --snapshot-key "$SNAPSHOT_KEY"
       - name: Create encrypted PostgreSQL backup
+        if: env.STORAGE_MODE == 'database'
         run: |
           python -m pip install 'cryptography>=45,<47'
           mkdir -p backup
@@ -54,6 +67,7 @@ jobs:
           cmp backup/database.dump backup/verify.dump
           rm backup/database.dump backup/verify.dump
       - name: Retain encrypted backup for 90 days
+        if: env.STORAGE_MODE == 'database'
         uses: actions/upload-artifact@v4
         with:
           name: database-backup-${{ github.run_id }}

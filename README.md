@@ -4,7 +4,7 @@ FamilyMart 系・LAWSON 系・セブン-イレブンの店舗位置を OpenPOI �
 
 公開先: https://competitor-closure-map.onrender.com/
 
-現在のアプリ版: **v0.3.1**。画面左上に版数を表示し、`GET /api/version` で版数とデプロイコミットを確認できます。機能を変更する際は package/lock の版数、画面表示、README を合わせて更新します。
+現在のアプリ版: **v0.4.0**。画面左上に版数を表示し、`GET /api/version` で版数とデプロイコミットを確認できます。機能を変更する際は package/lock の版数、画面表示、README を合わせて更新します。
 
 公開版は **収録店舗マップ** を初期表示します。OpenPOIから実際に取得した全国23,795件を、地図の表示範囲では件数マーカーにまとめ、拡大すると個別のブランドロゴで表示します。右側の実店舗一覧はブランド・都道府県・市区町村・店名/住所で検索できます。**閉店・消失シグナル** に切り替えると、時系列差分から検知したイベントだけを表示します。収録店舗は営業中と確認済みという意味ではありません。
 収録店舗マップでは **観測期間 開始・終了** を指定できます。期間を指定しないと現在収録されている店舗、指定すると期間中に一度でもOpenPOIで観測された店舗を一覧と地図に表示します。期間内に複数回観測した場合、店名・住所・位置には期間内の最新記録を使います。両端の日付を含み、日付は日本時間です。現在は収録されていない店舗も過去の観測期間には表示されます。記録がない期間の店舗や、その日に実際に営業していたかどうかは判定できません。
@@ -25,7 +25,7 @@ FamilyMart 系・LAWSON 系・セブン-イレブンの店舗位置を OpenPOI �
 ## 構成
 
 - `collector/`: OpenPOI / CSV / fixture の収集、正規化、都道府県別差分、根拠・状態管理。
-- 観測履歴は正規化テーブルに保存し、差分計算用の最新状態だけを圧縮したチェックポイントとして保持します。
+- PostgreSQL運用からGoogle Sheets運用へ切り替える移行コマンドを備えます。Sheetsでは「Stores」に1店舗1行の現在台帳、「Changes」に初回登録・店舗情報変更・消失/再登場だけを記録し、イベント・根拠・取得履歴も別タブで保持します。毎週の同一店舗を重複行として追加しません。
 - `supabase/migrations/`: PostgreSQL 18 + PostGIS のテーブル、RLS、距離計算関数。Supabase 以外の PostGIS 対応DBでも実行できます。
 - `apps/web/`: Next.js + MapLibre の読み取り専用APIと地図。ブランド複数選択、都道府県、状態、距離、期間、市区町村で絞り込みます。
 - `.github/workflows/snapshot.yml`: 毎週月曜12:00 JSTの全国 snapshot。手動実行も可能です。
@@ -55,7 +55,15 @@ python3 -m collector snapshot --source openpoi --prefecture 全国 --snapshot-ke
 
 OpenPOI の取得結果は、成功したブランドごとに `data/openpoi-cache/` へ同じ snapshot key で一時保存します。DB保存に失敗して再実行する場合、取得済みブランドは再ダウンロードしません。キャッシュは Git 管理対象外で、保存済み snapshot があれば DB 側の冪等性チェックを優先します。元データを取り直すときは `OPENPOI_REFRESH_CACHE=1` を指定します。ネットワーク取得中は DB の書き込みロックを保持しません。
 
-公開Webに必要な変数は `DATA_MODE=database`、`NEXT_PUBLIC_DATA_MODE=database`、`DATABASE_URL` です。Render Blueprint は既存の `competitor-closure-map-db` から内部接続URLを参照します。GitHub Actions には同じDBの外部接続URLをリポジトリ Secret `DATABASE_URL` として登録します。ワークフローは `PGSSLMODE=require` で接続します。
+公開Webは現在 `DATA_MODE=database`、`NEXT_PUBLIC_DATA_MODE=database`、`DATABASE_URL` で稼働します。Sheetsへ切り替える際は次の順序で実施します。
+
+1. 専用のGoogleサービスアカウントを用意し、移行先スプレッドシートだけに編集権限を付与します。シートを「リンクを知っている全員」に公開しません。
+2. GitHub Actions Secrets `GOOGLE_SERVICE_ACCOUNT_JSON` と Variables `SHEETS_SPREADSHEET_ID` を設定します。`DATABASE_URL` は初回移行用として残します。
+3. Actions の `Migrate store master to Google Sheets` を一度実行します。既存店舗、過去の実観測から抽出した変更履歴、閉店イベント、根拠、取得履歴がシートへ移ります。
+4. Renderの環境変数を `DATA_MODE=sheets`、`NEXT_PUBLIC_DATA_MODE=sheets` にし、同じ `GOOGLE_SERVICE_ACCOUNT_JSON` と `SHEETS_SPREADSHEET_ID` を設定して再デプロイします。
+5. GitHub Actions Variables `STORAGE_MODE=sheets` を設定します。以後の週次取得はシートへ更新されます。DBは切替確認後も履歴の予備コピーとして保持できます。
+
+Sheetsの各タブは `Stores`（店舗台帳）、`Changes`（変化のみ）、`ClosureEvents`（閉店シグナル）、`Evidence`（根拠）、`SnapshotRuns`（取得履歴）です。GitHub接続情報が未設定の間は現行DB運用のままで、Sheets切替を先行してアプリを停止させない設定です。
 
 **Render Free Postgres は2026年11月3日に期限を迎え、バックアップもありません。継続運用には期限前に永続DBへ移行してください。** 無料枠では長期保存を保証できません。移行時は `pg_dump` / `pg_restore` で履歴ごと移し、RenderとGitHubの接続先を更新します。
 

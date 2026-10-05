@@ -4,10 +4,12 @@ import path from 'node:path';
 import { Pool } from 'pg';
 import type { Closure, Filters, Store, StoreMapPoint } from './types';
 import type { StoreFilters } from './store-filters';
+import { getSheetsState } from './sheets-reader';
 
 const dbMode = process.env.DATA_MODE === 'database';
+const sheetMode = process.env.DATA_MODE === 'sheets';
 const pool = dbMode ? new Pool({connectionString:process.env.DATABASE_URL, max:4}) : null;
-type State = {runs:Array<{status:string;finished_at:string}>;stores:Store[];observations:Array<Record<string,unknown>>;events:Array<Record<string,unknown>>;evidence:Array<Record<string,unknown>>};
+type State = {runs:Array<{status:string;finished_at:string;prefecture?:string}>;stores:Store[];observations:Array<Record<string,unknown>>;events:Array<Record<string,unknown>>;evidence:Array<Record<string,unknown>>;changes?:Array<Record<string,unknown>>};
 
 async function fixtureState(): Promise<State> {
   const filename = path.resolve(process.cwd(), 'data/fixture-state.json');
@@ -17,12 +19,49 @@ async function fixtureState(): Promise<State> {
     return JSON.parse(await readFile(path.resolve(process.cwd(), 'fixtures/demo_state.json'), 'utf8')) as State;
   }
 }
+async function sourceState():Promise<State> {
+  if(!sheetMode)return fixtureState();
+  const sheet=await getSheetsState();
+  const observations:Record<string,unknown>[]=[];
+  for(const store of sheet.stores){
+    observations.push({id:store.last_observation_id||`latest:${store.id}`,store_id:store.id,observed_name:store.canonical_name,observed_address:store.address,lat:store.lat,lng:store.lng,source:store.source,observed_at:store.last_observed_at||store.last_seen_at,attributions:[]});
+  }
+  for(const change of sheet.changes){
+    observations.push({id:change.id,store_id:change.store_id,observed_name:change.observed_name,observed_address:change.observed_address,lat:change.lat,lng:change.lng,source:change.source,observed_at:change.observed_at,attributions:[]});
+  }
+  return {runs:sheet.runs as State['runs'],stores:sheet.stores as Store[],observations,events:sheet.events,evidence:sheet.evidence,changes:sheet.changes};
+}
 function parseNumber(v:unknown): number|null { return v == null ? null : Number(v); }
 function escapeLike(value:string) {return `%${value.replace(/[\\%_]/g,'\\$&')}%`;}
 function historical(filters:StoreFilters):boolean {return Boolean(filters.from||filters.to);}
 function observationDay(value:string):string {return new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value));}
 function fixtureStores(state:State, filters:StoreFilters):Store[] {
-  const candidates=historical(filters)?[...state.observations]
+  const changesByStore=new Map<string,Array<Record<string,unknown>>>();
+  for(const change of state.changes??[]){const id=String(change.store_id);const rows=changesByStore.get(id)??[];rows.push(change);changesByStore.set(id,rows);}
+  const candidates=historical(filters)&&state.changes?[...state.stores].flatMap(store=>{
+    const timeline=(changesByStore.get(store.id)??[]).sort((a,b)=>String(a.observed_at).localeCompare(String(b.observed_at)));
+    const from=filters.from?new Date(`${filters.from}T00:00:00+09:00`).getTime():Number.NEGATIVE_INFINITY;
+    const to=filters.to?new Date(`${filters.to}T23:59:59.999+09:00`).getTime():Number.POSITIVE_INFINITY;
+    let activeAt:number|undefined;
+    let matchedChange:Record<string,unknown>|undefined;
+    let matched=false;
+    const initial=store as Store & {first_seen_at?:string;last_seen_at?:string};
+    activeAt=initial.first_seen_at?new Date(initial.first_seen_at).getTime():undefined;
+    for(const change of timeline){
+      const time=new Date(String(change.observed_at)).getTime();
+      if(['BASELINE','NEW_STORE','REOPENED'].includes(String(change.change_type))){activeAt=time;matchedChange=change;}
+      else if(change.change_type==='STORE_UPDATED'&&activeAt!==undefined&&time<=to)matchedChange=change;
+      else if(change.change_type==='MISSING'){
+        if(activeAt!==undefined&&activeAt<=to&&time>=from)matched=true;
+        activeAt=undefined;
+      }
+      if(activeAt!==undefined&&activeAt<=to&&(!Number.isFinite(to)||time<=to))matchedChange=change.change_type==='STORE_UPDATED'?change:matchedChange;
+    }
+    if(activeAt!==undefined&&activeAt<=to)matched=true;
+    if(!matched)return [];
+    const change=matchedChange;
+    return [{...store,...(change?{canonical_name:String(change.observed_name||store.canonical_name),address:String(change.observed_address||store.address),lat:Number(change.lat??store.lat),lng:Number(change.lng??store.lng)}:{}),observed_at:String(change?.observed_at??initial.last_seen_at??store.observed_at??'')}];
+  }):historical(filters)?[...state.observations]
     .filter(o=>{const day=observationDay(String(o.observed_at));return (!filters.from||day>=filters.from)&&(!filters.to||day<=filters.to);})
     .sort((a,b)=>String(b.observed_at).localeCompare(String(a.observed_at)))
     .reduce((found,observation)=>{
@@ -62,7 +101,7 @@ function storeScope(filters:StoreFilters,values:unknown[]) {
 }
 export async function listCurrentStores(filters:StoreFilters):Promise<{items:Store[];total:number}> {
   if(!filters.brands.length)return {items:[],total:0};
-  if(!pool){const all=fixtureStores(await fixtureState(),filters);return {items:all.slice(filters.page*100,(filters.page+1)*100),total:all.length};}
+  if(!pool){const all=fixtureStores(await sourceState(),filters);return {items:all.slice(filters.page*100,(filters.page+1)*100),total:all.length};}
   const values:unknown[]=[filters.brands];
   const scope=storeScope(filters,values);
   const where=scope.predicates.join(' and ');
@@ -72,7 +111,7 @@ export async function listCurrentStores(filters:StoreFilters):Promise<{items:Sto
   return {items:rows.rows,total:count.rows[0].total};
 }
 export async function getStore(id:string,filters:StoreFilters):Promise<Store|null> {
-  if(!pool)return fixtureStores(await fixtureState(),filters).find(store=>store.id===id)??null;
+  if(!pool)return fixtureStores(await sourceState(),filters).find(store=>store.id===id)??null;
   const values:unknown[]=[filters.brands];
   const scope=storeScope(filters,values);
   values.push(id);
@@ -83,7 +122,7 @@ export async function listStoreMapPoints(filters:StoreFilters,bbox:[number,numbe
   if(!filters.brands.length)return {points:[],truncated:false};
   const step=Math.max(0.00005,360/2**zoom*80/512);
   if(!pool){
-    const stores=fixtureStores(await fixtureState(),filters)
+    const stores=fixtureStores(await sourceState(),filters)
       .filter(store=>store.lng>=bbox[0]&&store.lat>=bbox[1]&&store.lng<=bbox[2]&&store.lat<=bbox[3]);
     const grouped=new Map<string,Store[]>();
     for(const store of stores){const key=`${Math.floor(store.lng/step)}:${Math.floor(store.lat/step)}`;grouped.set(key,[...(grouped.get(key)??[]),store]);}
@@ -130,7 +169,7 @@ const projection = `select e.id,e.detected_at,e.last_seen_at,e.status,e.closure_
   left join stores n on n.id=e.nearest_seven_store_id join store_observations o on o.id=e.last_observation_id`;
 export async function listClosures(f:Filters):Promise<{items:Closure[];total:number}> {
   if (!pool) {
-    const state=await fixtureState();
+    const state=await sourceState();
     const all=state.events.map(e=>fixtureClosure(state,e)).filter(e=>filtered(e,f)).sort((a,b)=>b.detected_at.localeCompare(a.detected_at)||((a.distance_m??Infinity)-(b.distance_m??Infinity)));
     return {items:all.slice(f.page*100,(f.page+1)*100),total:all.length};
   }
@@ -151,19 +190,19 @@ export async function listClosures(f:Filters):Promise<{items:Closure[];total:num
   return {items:rows.rows.map(row=>({...row,distance_m:parseNumber(row.distance_m),store:row.store,nearest_seven:row.nearest_seven,last_observation:row.last_observation})),total:count.rows[0].total};
 }
 export async function getClosure(id:string):Promise<Closure|null> {
-  if (!pool) {const state=await fixtureState();const event=state.events.find(e=>e.id===id);return event?fixtureClosure(state,event):null;}
+  if (!pool) {const state=await sourceState();const event=state.events.find(e=>e.id===id);return event?fixtureClosure(state,event):null;}
   const rows=await pool.query(`${projection} where e.id=$1`,[id]);
   if (!rows.rowCount) return null;
   const evidence=await pool.query('select id,evidence_type,title,source_ref,evidence_date,summary,supports_closure from event_evidence where closure_event_id=$1 order by coalesce(evidence_date,created_at::date) desc',[id]);
   return {...rows.rows[0],distance_m:parseNumber(rows.rows[0].distance_m),evidence:evidence.rows};
 }
 export async function getHistory(id:string) {
-  if (!pool) {const state=await fixtureState();return state.observations.filter(o=>o.store_id===id).sort((a,b)=>String(b.observed_at).localeCompare(String(a.observed_at))).map(({raw_payload,licenses,...rest})=>rest);}
+  if (!pool) {const state=await sourceState();if(state.changes)return state.changes.filter(change=>change.store_id===id).sort((a,b)=>String(b.observed_at).localeCompare(String(a.observed_at)));return state.observations.filter(o=>o.store_id===id).sort((a,b)=>String(b.observed_at).localeCompare(String(a.observed_at))).map(({raw_payload,licenses,...rest})=>rest);}
   const rows=await pool.query('select id,snapshot_run_id,source,source_store_id,observed_name,observed_address,lat,lng,source_category,source_business_type,attributions,observed_at from store_observations where store_id=$1 order by observed_at desc limit 100',[id]);
   return rows.rows;
 }
 export async function health(prefecture='') {
-  if (!pool) {const state=await fixtureState();const stores=state.stores.filter(s=>s.current_presence==='PRESENT'&&(!prefecture||s.prefecture===prefecture));const runs=state.runs.filter(r=>r.status==='succeeded');return {ok:true,mode:'fixture',db:'not configured',first_snapshot:runs[0]?.finished_at??null,latest_snapshot:runs.at(-1)?.finished_at??null,snapshot_day_count:new Set(runs.map(r=>observationDay(r.finished_at))).size,snapshot_count:state.runs.length,prefecture_count:1,store_count:stores.length,brands:Object.fromEntries(['FAMILY_MART','LAWSON','SEVEN_ELEVEN'].map(family=>[family,stores.filter(s=>s.brand_family===family).length])),scope_prefecture:prefecture,extent:stores.length?{west:Math.min(...stores.map(s=>s.lng)),south:Math.min(...stores.map(s=>s.lat)),east:Math.max(...stores.map(s=>s.lng)),north:Math.max(...stores.map(s=>s.lat))}:null};}
+  if (!pool) {const state=await sourceState();const stores=state.stores.filter(s=>s.current_presence==='PRESENT'&&(!prefecture||s.prefecture===prefecture));const runs=state.runs.filter(r=>r.status==='succeeded'&&(!prefecture||r.prefecture===prefecture));const isSheets=sheetMode;return {ok:true,mode:isSheets?'sheets':'fixture',db:isSheets?'connected':'not configured',first_snapshot:runs[0]?.finished_at??null,latest_snapshot:runs.at(-1)?.finished_at??null,snapshot_day_count:new Set(runs.map(r=>observationDay(r.finished_at))).size,snapshot_count:runs.length,prefecture_count:isSheets?new Set(runs.map(r=>r.prefecture)).size:1,store_count:stores.length,brands:Object.fromEntries(['FAMILY_MART','LAWSON','SEVEN_ELEVEN'].map(family=>[family,stores.filter(s=>s.brand_family===family).length])),scope_prefecture:prefecture,extent:stores.length?{west:Math.min(...stores.map(s=>s.lng)),south:Math.min(...stores.map(s=>s.lat)),east:Math.max(...stores.map(s=>s.lng)),north:Math.max(...stores.map(s=>s.lat))}:null};}
   await pool.query('select 1');
   const condition=prefecture?' and prefecture=$1':'';
   const values=prefecture?[prefecture]:[];
