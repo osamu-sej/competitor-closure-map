@@ -15,11 +15,12 @@ const statusDescriptions:Record<string,string>={
   MISSING:'前回は店舗データに存在し、最新の取得では見つからない店舗。移転・一時休業・データ欠落の可能性もあり、閉店とは判定しません。'
 };
 const date=(value?:string|null)=>value?new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value)):'未確認';
+const day=(value?:string|null)=>value?new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value)):'';
 export default function Dashboard(){
   const [storeMode,setStoreMode]=useState(process.env.NEXT_PUBLIC_DATA_MODE==='database');
   const [status,setStatus]=useState('CLOSED_CONFIRMED');const [selectedBrands,setSelectedBrands]=useState(['FAMILY_MART','LAWSON']);const [distance,setDistance]=useState(100);
   const [prefecture,setPrefecture]=useState('');const [municipality,setMunicipality]=useState('');const [from,setFrom]=useState('');const [to,setTo]=useState('');
-  const [health,setHealth]=useState<{latest_snapshot:string|null;snapshot_count:number;prefecture_count:number;store_count:number;brands:Record<string,number>;scope_prefecture:string;extent:{west:number;south:number;east:number;north:number}|null}|null>(null);
+  const [health,setHealth]=useState<{first_snapshot:string|null;latest_snapshot:string|null;snapshot_day_count:number;snapshot_count:number;prefecture_count:number;store_count:number;brands:Record<string,number>;scope_prefecture:string;extent:{west:number;south:number;east:number;north:number}|null}|null>(null);
   const [items,setItems]=useState<Closure[]>([]);const [total,setTotal]=useState(0);const [page,setPage]=useState(0);
   const [selectedId,setSelectedId]=useState<string|null>(null);const [detail,setDetail]=useState<Closure|null>(null);
   const [loading,setLoading]=useState(true);const [error,setError]=useState('');
@@ -32,6 +33,9 @@ export default function Dashboard(){
   const toggleBrand=(family:string)=>{setSelectedBrands(current=>current.includes(family)?current.filter(value=>value!==family):[...current,family]);setPage(0);};
   const change=(fn:(value:string)=>void)=>(event:React.ChangeEvent<HTMLSelectElement|HTMLInputElement>)=>{fn(event.target.value);setPage(0);};
   const demoMode=process.env.NEXT_PUBLIC_DATA_MODE!=='database';
+  const firstDay=health?.scope_prefecture===prefecture?day(health.first_snapshot):'';
+  const beforeCollection=Boolean(firstDay&&from&&from<firstDay);
+  const entirelyBeforeCollection=Boolean(firstDay&&to&&to<firstDay);
   return <main className={'dashboard'+(demoMode?' demo-mode':' data-mode')}>
     <header className="topbar"><div className="brandmark"><div className="brand-icon">↗</div><div><h1>競合閉店MAP <a className="version-link" href="/api/version" title="バージョンとデプロイコミット">v{packageInfo.version}</a></h1><p>全国 / 店舗マスタ差分モニター</p></div></div><div className="top-note"><span className="live-dot"/> {demoMode?'実データ未接続':'実データ'} <span className="top-divider"/> 全国47都道府県</div></header>
     {demoMode&&<div className="demo-banner" role="status"><strong>実データは未収集です</strong><span>表示される店舗は架空の動作確認用データです。期間を指定しても、過去の実店舗の閉店状況は検索できません。</span></div>}
@@ -47,8 +51,9 @@ export default function Dashboard(){
       <label>市区町村<input aria-label="市区町村" placeholder="すべて" value={municipality} onChange={change(setMunicipality)}/></label>
       <label>期間 開始<input aria-label="期間 開始" type="date" value={from} onChange={change(setFrom)}/></label><label>終了<input aria-label="期間 終了" type="date" value={to} onChange={change(setTo)}/></label>
     </div>
+    {!demoMode&&<div className="closure-coverage-note" role="status"><strong>閉店検索の対象期間</strong> {firstDay?`観測開始 ${date(health?.first_snapshot)}・観測日 ${health?.snapshot_day_count??0}日分。`:'観測期間を確認中です。'}{beforeCollection||entirelyBeforeCollection?'指定期間には観測開始前の日付が含まれます。開始前の閉店は未収集で、0件は閉店がなかったことを意味しません。':'期間指定は収集済みの閉店・消失イベントを絞り込みます。観測開始前の閉店履歴は検索できません。'}</div>}
     <div className="content"><MapPanel items={items} selected={selected} distance={distance} onSelect={select}/><aside className="sidebar"><div className="sidebar-heading"><div><span className="eyebrow">CLOSURE SIGNALS</span><h2>店舗一覧 <small>{total} 件</small></h2></div><div className="legend">地図上のロゴで店舗を表示</div></div>
-      {loading&&<div className="state-message">読み込み中…</div>}{error&&<div className="state-message error">{error}</div>}{!loading&&!error&&items.length===0&&<div className="state-message"><strong>該当する店舗はありません</strong><p>{demoMode?'架空のデモデータ内に該当する店舗はありません。状態・距離・期間を変更してください。':health?.snapshot_count===0?'全国の初回スナップショットを収集中です。': '該当する閉店・消失イベントはありません。初回取得後の差分を待つか、状態・距離・期間を変更してください。'}</p></div>}
+      {loading&&<div className="state-message">読み込み中…</div>}{error&&<div className="state-message error">{error}</div>}{!loading&&!error&&items.length===0&&<div className="state-message"><strong>{entirelyBeforeCollection?'指定期間の履歴は未収集です':'該当する店舗はありません'}</strong><p>{demoMode?'架空のデモデータ内に該当する店舗はありません。状態・距離・期間を変更してください。':entirelyBeforeCollection?`${date(health?.first_snapshot)}より前の店舗差分は保存されていません。`:health?.snapshot_count===0?'全国の初回スナップショットを収集中です。':health?.snapshot_day_count===1?'観測日はまだ初回の1日分です。以前の閉店は判定できず、今後の取得差分から検知します。':'選択した状態・距離・期間に該当する閉店・消失イベントはありません。'}</p></div>}
       <div className="result-list">{items.map(item=><button type="button" key={item.id} className={`result-card ${selectedId===item.id?'selected':''}`} onClick={()=>select(item.id)}><div className="card-top"><span className={`brand-badge ${item.store.brand_family==='LAWSON'?'lawson':'family'}`}>{item.store.brand_family==='LAWSON'?'LAWSON':'FamilyMart'}</span><span className={`status-badge ${item.status==='CLOSED_CONFIRMED'?'confirmed':''}`}>{labels[item.status]??item.status}</span></div><h3>{item.store.canonical_name}</h3><p className="card-city">{item.store.prefecture} {item.store.city}</p><div className="card-meta"><span>検知 {date(item.detected_at)}</span><strong>{item.distance_m==null?'距離未算出':`${Math.round(item.distance_m)}m`}</strong></div><div className="card-footer">収録店内の最寄り {item.nearest_seven?.canonical_name??'未取得'} <span>›</span></div></button>)}</div>
       {total>100&&<div className="pagination"><button disabled={page===0} onClick={()=>setPage(page-1)}>前へ</button><span>{page+1} / {Math.ceil(total/100)}</span><button disabled={(page+1)*100>=total} onClick={()=>setPage(page+1)}>次へ</button></div>}
     </aside></div>

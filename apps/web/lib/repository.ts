@@ -163,11 +163,11 @@ export async function getHistory(id:string) {
   return rows.rows;
 }
 export async function health(prefecture='') {
-  if (!pool) {const state=await fixtureState();const stores=state.stores.filter(s=>s.current_presence==='PRESENT'&&(!prefecture||s.prefecture===prefecture));return {ok:true,mode:'fixture',db:'not configured',latest_snapshot:state.runs.filter(r=>r.status==='succeeded').at(-1)?.finished_at??null,snapshot_count:state.runs.length,prefecture_count:1,store_count:stores.length,brands:Object.fromEntries(['FAMILY_MART','LAWSON','SEVEN_ELEVEN'].map(family=>[family,stores.filter(s=>s.brand_family===family).length])),scope_prefecture:prefecture,extent:stores.length?{west:Math.min(...stores.map(s=>s.lng)),south:Math.min(...stores.map(s=>s.lat)),east:Math.max(...stores.map(s=>s.lng)),north:Math.max(...stores.map(s=>s.lat))}:null};}
+  if (!pool) {const state=await fixtureState();const stores=state.stores.filter(s=>s.current_presence==='PRESENT'&&(!prefecture||s.prefecture===prefecture));const runs=state.runs.filter(r=>r.status==='succeeded');return {ok:true,mode:'fixture',db:'not configured',first_snapshot:runs[0]?.finished_at??null,latest_snapshot:runs.at(-1)?.finished_at??null,snapshot_day_count:new Set(runs.map(r=>observationDay(r.finished_at))).size,snapshot_count:state.runs.length,prefecture_count:1,store_count:stores.length,brands:Object.fromEntries(['FAMILY_MART','LAWSON','SEVEN_ELEVEN'].map(family=>[family,stores.filter(s=>s.brand_family===family).length])),scope_prefecture:prefecture,extent:stores.length?{west:Math.min(...stores.map(s=>s.lng)),south:Math.min(...stores.map(s=>s.lat)),east:Math.max(...stores.map(s=>s.lng)),north:Math.max(...stores.map(s=>s.lat))}:null};}
   await pool.query('select 1');
   const condition=prefecture?' and prefecture=$1':'';
   const values=prefecture?[prefecture]:[];
-  const result=await pool.query(`select max(finished_at) as latest_snapshot,count(*)::integer as snapshot_count,count(distinct prefecture)::integer as prefecture_count from snapshot_runs where status='succeeded'${condition}`,values);
+  const result=await pool.query(`select min(started_at) as first_snapshot,max(finished_at) as latest_snapshot,count(distinct (started_at at time zone 'Asia/Tokyo')::date)::integer as snapshot_day_count,count(*)::integer as snapshot_count,count(distinct prefecture)::integer as prefecture_count from snapshot_runs where status='succeeded'${condition}`,values);
   const stores=await pool.query(`select brand_family,count(*)::integer as count from stores where current_presence='PRESENT'${condition} group by brand_family`,values);
   // Source prefecture labels can contain a few coordinates far outside the
   // prefecture. Fit the common footprint instead of one erroneous POI.

@@ -47,6 +47,8 @@
 .store-filterbar input[aria-label='店名・住所']{width:190px}
 .period-clear{height:33px;border:1px solid #cbd8e0;border-radius:6px;background:#fff;color:#315a71;font-size:11px;font-weight:700;padding:0 11px}
 .store-period-note{padding:8px 24px;background:#eaf4f8;border-bottom:1px solid #cfe3eb;color:#31566d;font-size:11px;line-height:1.4}
+.closure-coverage-note{padding:8px 24px;background:#fff1da;border-bottom:1px solid #f0d7ab;color:#715132;font-size:11px;line-height:1.4}
+.dashboard.data-mode .closure-coverage-note+.content{height:calc(100vh - 314px)}
 .dashboard.data-mode .store-content,.dashboard.demo-mode .store-content{height:calc(100vh - 314px)}
 .store-observed{font-size:11px;color:#69818f;margin:7px 0 0}
 .store-address{font-size:11px;color:#728693;line-height:1.4;margin:7px 0 0}
