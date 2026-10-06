@@ -107,10 +107,18 @@ function parseSmallRow(tab: 'SnapshotRuns' | 'ClosureEvents' | 'Evidence', row: 
 }
 
 export function storeFromRow(row: SheetRow, includeDates = false): Store & { first_seen_at?: string; last_seen_at?: string } {
+  const list = (input: unknown): string[] => {
+    try {
+      const parsed: unknown = JSON.parse(String(input ?? '[]'));
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+    } catch { return []; }
+  };
   const store: Store & { first_seen_at?: string; last_seen_at?: string } = {
     id: String(value(row, 0)), brand_family: String(value(row, 1)), canonical_name: String(value(row, 2)),
     address: String(value(row, 3)), prefecture: String(value(row, 4)), city: String(value(row, 5)),
     lat: number(value(row, 6)), lng: number(value(row, 7)), current_presence: String(value(row, 8, 'PRESENT')),
+    source: String(value(row, 13, 'openpoi')), source_category: String(value(row, 18)) || null,
+    source_business_type: String(value(row, 19)) || null, licenses: list(value(row, 20)), attributions: list(value(row, 21)),
   };
   if (includeDates) {
     store.first_seen_at = String(value(row, 10));

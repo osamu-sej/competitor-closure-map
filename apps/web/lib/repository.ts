@@ -10,6 +10,7 @@ import { changeFromRow, forEachSheetRow, getSmallSheetTab, storeFromRow, type Sh
 const dbMode = process.env.DATA_MODE === 'database';
 const sheetMode = process.env.DATA_MODE === 'sheets';
 const pool = dbMode ? new Pool({connectionString:process.env.DATABASE_URL, max:4}) : null;
+const lawsonOfficialBenchmark = {count:14630,as_of:'2026-08-31',source:'https://www.lawson.co.jp/company/ir/financial/monthly/index.html'};
 type State = {runs:Array<{status:string;finished_at:string;prefecture?:string}>;stores:Store[];observations:Array<Record<string,unknown>>;events:Array<Record<string,unknown>>;evidence:Array<Record<string,unknown>>;changes?:Array<Record<string,unknown>>};
 
 async function fixtureState(): Promise<State> {
@@ -73,7 +74,7 @@ async function listSheetsStores(filters:StoreFilters):Promise<{items:Store[];tot
   if(!filters.brands.length)return {items:[],total:0};
   const past=historical(filters);const states=past?await sheetHistory(filters):null;
   const capacity=(filters.page+1)*100;const heap:Store[]=[];let total=0;
-  await forEachSheetRow('Stores',past?'L':'I',row=>{
+  await forEachSheetRow('Stores','V',row=>{
     const store=storeFromRow(row,past);
     if(!store.id)return;
     let candidate:Store|undefined;
@@ -81,17 +82,17 @@ async function listSheetsStores(filters:StoreFilters):Promise<{items:Store[];tot
       const state=states!.get(store.id);
       if(state?.matched){const change=state.selected;candidate={...store,...(change?{canonical_name:change.observed_name||store.canonical_name,address:change.observed_address||store.address,lat:change.lat,lng:change.lng,observed_at:change.observed_at}:{observed_at:store.last_seen_at})};}
     }else if(store.current_presence==='PRESENT')candidate=store;
-    if(candidate&&matchesStore(candidate,filters)){total++;keepSmallest(heap,candidate,capacity);}
+    if(candidate&&store.current_presence!=='SUPPRESSED'&&matchesStore(candidate,filters)){total++;keepSmallest(heap,candidate,capacity);}
   });
   heap.sort(storeOrder);
   return {items:heap.slice(filters.page*100,(filters.page+1)*100),total};
 }
 async function storeByIdInSheets(id:string,filters:StoreFilters):Promise<Store|null> {
   const states=historical(filters)?await sheetHistory(filters):null;let found:Store|null=null;
-  await forEachSheetRow('Stores',states?'L':'I',row=>{
+  await forEachSheetRow('Stores','V',row=>{
     if(String(row[0]??'')!==id)return;
     const base=storeFromRow(row,Boolean(states));
-    if(states){const state=states.get(id);if(!state?.matched)return;const change=state.selected;found={...base,...(change?{canonical_name:change.observed_name||base.canonical_name,address:change.observed_address||base.address,lat:change.lat,lng:change.lng,observed_at:change.observed_at}:{observed_at:base.last_seen_at})};}
+    if(states){const state=states.get(id);if(!state?.matched||base.current_presence==='SUPPRESSED')return;const change=state.selected;found={...base,...(change?{canonical_name:change.observed_name||base.canonical_name,address:change.observed_address||base.address,lat:change.lat,lng:change.lng,observed_at:change.observed_at}:{observed_at:base.last_seen_at})};}
     else if(base.current_presence==='PRESENT')found=base;
     return false;
   });
@@ -140,7 +141,7 @@ function fixtureStores(state:State, filters:StoreFilters):Store[] {
       }
       return found;
     },new Map<string,Store>()):null;
-  return (candidates?[...candidates.values()]:state.stores.filter(store=>store.current_presence==='PRESENT')).filter(store=>
+  return (candidates?[...candidates.values()].filter(store=>store.current_presence!=='SUPPRESSED'):state.stores.filter(store=>store.current_presence==='PRESENT')).filter(store=>
     filters.brands.includes(store.brand_family)
     &&(!filters.prefecture||store.prefecture===filters.prefecture)
     &&(!filters.municipality||store.city.includes(filters.municipality))
@@ -194,10 +195,10 @@ export async function listStoreMapPoints(filters:StoreFilters,bbox:[number,numbe
   if(sheetMode){
     const past=historical(filters);const states=past?await sheetHistory(filters):null;
     const groups=new Map<string,MapAggregate>();
-    await forEachSheetRow('Stores',past?'L':'I',row=>{
+    await forEachSheetRow('Stores','V',row=>{
       const store=storeFromRow(row,past);if(!store.id)return;
       let candidate:Store|undefined;
-      if(past){const state=states!.get(store.id);if(state?.matched){const change=state.selected;candidate={...store,...(change?{canonical_name:change.observed_name||store.canonical_name,address:change.observed_address||store.address,lat:change.lat,lng:change.lng,observed_at:change.observed_at}:{observed_at:store.last_seen_at})};}}
+      if(past){const state=states!.get(store.id);if(state?.matched&&store.current_presence!=='SUPPRESSED'){const change=state.selected;candidate={...store,...(change?{canonical_name:change.observed_name||store.canonical_name,address:change.observed_address||store.address,lat:change.lat,lng:change.lng,observed_at:change.observed_at}:{observed_at:store.last_seen_at})};}}
       else if(store.current_presence==='PRESENT')candidate=store;
       if(candidate&&matchesStore(candidate,filters)&&candidate.lng>=bbox[0]&&candidate.lat>=bbox[1]&&candidate.lng<=bbox[2]&&candidate.lat<=bbox[3])addMapStore(groups,candidate,step);
     });
@@ -236,6 +237,7 @@ function fixtureClosure(state:State, event:Record<string,unknown>):Closure {
   return {id:String(event.id),store,nearest_seven:nearest,detected_at:String(event.detected_at),last_seen_at:String(event.last_seen_at),status:String(event.status),closure_date:event.closure_date as string|null,reason:event.reason as string|null,confidence:String(event.confidence),distance_m:parseNumber(event.distance_m),within_100m:Boolean(event.within_100m),last_observation:obs as Closure['last_observation'],evidence:state.evidence.filter(e=>e.closure_event_id===event.id) as Closure['evidence']};
 }
 function filtered(event:Closure, f:Filters):boolean {
+  if(event.status==='OUT_OF_SCOPE')return false;
   if (f.status === 'CLOSED_BOTH' ? !['CLOSED_CONFIRMED','CLOSED_SUSPECTED'].includes(event.status) : f.status !== 'ALL' && event.status !== f.status) return false;
   if (!f.brands.includes(event.store.brand_family)) return false;
   if (f.prefecture && event.store.prefecture !== f.prefecture) return false;
@@ -251,7 +253,7 @@ async function materializeSheetClosures(events:Record<string,unknown>[]):Promise
   const storeIds=new Set<string>();
   for(const event of events){storeIds.add(String(event.store_id));if(event.nearest_seven_store_id)storeIds.add(String(event.nearest_seven_store_id));}
   const stores=new Map<string,Store>();
-  await forEachSheetRow('Stores','I',row=>{
+  await forEachSheetRow('Stores','V',row=>{
     const id=String(row[0]??'');
     if(storeIds.has(id))stores.set(id,storeFromRow(row));
     if(stores.size===storeIds.size)return false;
@@ -260,7 +262,7 @@ async function materializeSheetClosures(events:Record<string,unknown>[]):Promise
   return events.flatMap(event=>{
     const store=stores.get(String(event.store_id));if(!store)return [];
     const nearest=event.nearest_seven_store_id?stores.get(String(event.nearest_seven_store_id))??null:null;
-    const lastObservation={id:String(event.last_observation_id),store_id:store.id,observed_name:store.canonical_name,observed_address:store.address,lat:store.lat,lng:store.lng,source:'openpoi',observed_at:String(event.last_seen_at),attributions:[]} as Closure['last_observation'];
+    const lastObservation={id:String(event.last_observation_id),store_id:store.id,observed_name:store.canonical_name,observed_address:store.address,lat:store.lat,lng:store.lng,source:store.source??'openpoi',source_category:store.source_category??null,source_business_type:store.source_business_type??null,observed_at:String(event.last_seen_at),licenses:store.licenses??[],attributions:store.attributions??[]} as Closure['last_observation'];
     return [{...event,distance_m:parseNumber(event.distance_m),within_100m:Boolean(event.within_100m),store,nearest_seven:nearest,last_observation:lastObservation,
       evidence:evidence.filter(row=>row.closure_event_id===event.id)} as unknown as Closure];
   });
@@ -275,6 +277,7 @@ export async function listClosures(f:Filters):Promise<{items:Closure[];total:num
   if(sheetMode){
     const events=await getSmallSheetTab('ClosureEvents');
     const relevant=events.filter(event=>{
+      if(event.status==='OUT_OF_SCOPE')return false;
       if(f.status==='CLOSED_BOTH'?!['CLOSED_CONFIRMED','CLOSED_SUSPECTED'].includes(String(event.status)):f.status!=='ALL'&&event.status!==f.status)return false;
       if(event.distance_m==null||Number(event.distance_m)>f.distance)return false;
       const date=String(event.closure_date??event.detected_at).slice(0,10);
@@ -292,7 +295,7 @@ export async function listClosures(f:Filters):Promise<{items:Closure[];total:num
     return {items:all.slice(f.page*100,(f.page+1)*100),total:all.length};
   }
   const values:unknown[]=[f.distance];
-  const predicates=[`e.distance_m <= $1`];
+  const predicates=[`e.distance_m <= $1`,`e.status <> 'OUT_OF_SCOPE'`];
   if (f.status === 'CLOSED_BOTH') predicates.push(`e.status in ('CLOSED_CONFIRMED','CLOSED_SUSPECTED')`);
   else if (f.status !== 'ALL') {values.push(f.status);predicates.push(`e.status = $${values.length}`);}
   values.push(f.brands);predicates.push(`s.brand_family = any($${values.length}::text[])`);
@@ -308,9 +311,9 @@ export async function listClosures(f:Filters):Promise<{items:Closure[];total:num
   return {items:rows.rows.map(row=>({...row,distance_m:parseNumber(row.distance_m),store:row.store,nearest_seven:row.nearest_seven,last_observation:row.last_observation})),total:count.rows[0].total};
 }
 export async function getClosure(id:string):Promise<Closure|null> {
-  if(sheetMode){const events=await getSmallSheetTab('ClosureEvents');const event=events.find(row=>row.id===id);if(!event)return null;return (await materializeSheetClosures([event]))[0]??null;}
-  if (!pool) {const state=await sourceState();const event=state.events.find(e=>e.id===id);return event?fixtureClosure(state,event):null;}
-  const rows=await pool.query(`${projection} where e.id=$1`,[id]);
+  if(sheetMode){const events=await getSmallSheetTab('ClosureEvents');const event=events.find(row=>row.id===id);if(!event||event.status==='OUT_OF_SCOPE')return null;return (await materializeSheetClosures([event]))[0]??null;}
+  if (!pool) {const state=await sourceState();const event=state.events.find(e=>e.id===id);return event&&event.status!=='OUT_OF_SCOPE'?fixtureClosure(state,event):null;}
+  const rows=await pool.query(`${projection} where e.id=$1 and e.status <> 'OUT_OF_SCOPE'`,[id]);
   if (!rows.rowCount) return null;
   const evidence=await pool.query('select id,evidence_type,title,source_ref,evidence_date,summary,supports_closure from event_evidence where closure_event_id=$1 order by coalesce(evidence_date,created_at::date) desc',[id]);
   return {...rows.rows[0],distance_m:parseNumber(rows.rows[0].distance_m),evidence:evidence.rows};
@@ -351,7 +354,7 @@ async function sheetsHealth(prefecture:string):Promise<Record<string,unknown>> {
   const value={ok:true,mode:'sheets',db:'connected',first_snapshot:runs.length?runs.reduce((old,run)=>run.started_at&&run.started_at<old?run.started_at:old,runs[0].started_at):null,
     latest_snapshot:runs.length?runs.reduce((latest,run)=>run.finished_at>latest?run.finished_at:latest,runs[0].finished_at):null,
     snapshot_day_count:new Set(runs.map(run=>observationDay(run.finished_at))).size,snapshot_count:runs.length,
-    prefecture_count:new Set(runs.map(run=>run.prefecture).filter(Boolean)).size,store_count:storeCount,brands,lawson_variants:lawsonVariants,scope_prefecture:prefecture,extent};
+    prefecture_count:new Set(runs.map(run=>run.prefecture).filter(Boolean)).size,store_count:storeCount,brands,lawson_variants:lawsonVariants,lawson_official_count:lawsonOfficialBenchmark.count,lawson_official_as_of:lawsonOfficialBenchmark.as_of,lawson_official_source:lawsonOfficialBenchmark.source,scope_prefecture:prefecture,extent};
   sheetHealthCache.set(prefecture,{value,expiresAt:Date.now()+30000});
   return value;
 }
@@ -374,7 +377,7 @@ export async function health(prefecture='') {
     const lawsonVariants=emptyLawsonVariantCounts();
     for(const store of stores)if(store.brand_family==='LAWSON')addLawsonVariantCount(lawsonVariants,store.canonical_name);
     const isSheets=sheetMode;
-    return {ok:true,mode:isSheets?'sheets':'fixture',db:isSheets?'connected':'not configured',first_snapshot:runs[0]?.finished_at??null,latest_snapshot:runs.at(-1)?.finished_at??null,snapshot_day_count:new Set(runs.map(r=>observationDay(r.finished_at))).size,snapshot_count:runs.length,prefecture_count:isSheets?new Set(runs.map(r=>r.prefecture)).size:1,store_count:stores.length,brands,lawson_variants:lawsonVariants,scope_prefecture:prefecture,extent:stores.length?{west:Math.min(...stores.map(s=>s.lng)),south:Math.min(...stores.map(s=>s.lat)),east:Math.max(...stores.map(s=>s.lng)),north:Math.max(...stores.map(s=>s.lat))}:null};
+    return {ok:true,mode:isSheets?'sheets':'fixture',db:isSheets?'connected':'not configured',first_snapshot:runs[0]?.finished_at??null,latest_snapshot:runs.at(-1)?.finished_at??null,snapshot_day_count:new Set(runs.map(r=>observationDay(r.finished_at))).size,snapshot_count:runs.length,prefecture_count:isSheets?new Set(runs.map(r=>r.prefecture)).size:1,store_count:stores.length,brands,lawson_variants:lawsonVariants,lawson_official_count:lawsonOfficialBenchmark.count,lawson_official_as_of:lawsonOfficialBenchmark.as_of,lawson_official_source:lawsonOfficialBenchmark.source,scope_prefecture:prefecture,extent:stores.length?{west:Math.min(...stores.map(s=>s.lng)),south:Math.min(...stores.map(s=>s.lat)),east:Math.max(...stores.map(s=>s.lng)),north:Math.max(...stores.map(s=>s.lat))}:null};
   }
   await pool.query('select 1');
   const condition=prefecture?' and prefecture=$1':'';
@@ -393,5 +396,5 @@ export async function health(prefecture='') {
   const brands=Object.fromEntries(['FAMILY_MART','LAWSON','SEVEN_ELEVEN'].map(family=>[family,stores.rows.find(row=>row.brand_family===family)?.count??0]));
   const lawsonVariants=emptyLawsonVariantCounts();
   for(const row of lawsonNames.rows)addLawsonVariantCount(lawsonVariants,String(row.canonical_name),Number(row.count));
-  return {ok:true,mode:'database',db:'connected',...result.rows[0],store_count:stores.rows.reduce((sum,row)=>sum+row.count,0),brands,lawson_variants:lawsonVariants,scope_prefecture:prefecture,extent:bounds?.rows[0]?.west==null?null:bounds.rows[0]};
+  return {ok:true,mode:'database',db:'connected',...result.rows[0],store_count:stores.rows.reduce((sum,row)=>sum+row.count,0),brands,lawson_variants:lawsonVariants,lawson_official_count:lawsonOfficialBenchmark.count,lawson_official_as_of:lawsonOfficialBenchmark.as_of,lawson_official_source:lawsonOfficialBenchmark.source,scope_prefecture:prefecture,extent:bounds?.rows[0]?.west==null?null:bounds.rows[0]};
 }

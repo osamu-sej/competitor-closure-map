@@ -24,7 +24,7 @@ _MIN_WRITE_INTERVAL_SECONDS = 1.1
 _MAX_REQUEST_ATTEMPTS = 7
 _WRITE_CHUNK_ROWS = 5000
 HEADERS = {
-    "Stores": ["store_id", "brand_family", "store_name", "address", "prefecture", "municipality", "latitude", "longitude", "presence", "missing_count", "first_seen_at", "last_seen_at", "last_snapshot_key", "source", "source_store_id", "updated_at", "last_observation_id", "last_observed_at"],
+    "Stores": ["store_id", "brand_family", "store_name", "address", "prefecture", "municipality", "latitude", "longitude", "presence", "missing_count", "first_seen_at", "last_seen_at", "last_snapshot_key", "source", "source_store_id", "updated_at", "last_observation_id", "last_observed_at", "source_category", "source_business_type", "licenses_json", "attributions_json"],
     "Changes": ["change_id", "store_id", "observed_at", "change_type", "brand_family", "store_name", "address", "prefecture", "municipality", "latitude", "longitude", "source", "source_store_id", "snapshot_key"],
     "ClosureEvents": ["event_id", "store_id", "detected_at", "last_seen_at", "status", "closure_date", "reason", "confidence", "nearest_seven_store_id", "nearest_seven_name", "distance_m", "within_100m", "last_observation_id", "created_at", "updated_at"],
     "Evidence": ["evidence_id", "event_id", "evidence_type", "title", "source_ref", "evidence_date", "summary", "supports_closure", "created_at"],
@@ -111,6 +111,14 @@ def _bool(value: Any) -> bool:
     return value is True or str(value).lower() == "true"
 
 
+def _json_list(value: Any) -> list:
+    try:
+        parsed = json.loads(str(value)) if value not in (None, "") else []
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
 def load_state() -> dict:
     rows = _read_ranges()
     state = new_state()
@@ -130,6 +138,8 @@ def load_state() -> dict:
             "last_snapshot_key": str(_value(row, 12, "")), "source": str(_value(row, 13, "openpoi")),
             "source_store_id": _value(row, 14), "updated_at": str(_value(row, 15, "")),
             "last_observation_id": str(_value(row, 16, "")), "last_observed_at": str(_value(row, 17, _value(row, 11, ""))),
+            "source_category": _value(row, 18), "source_business_type": _value(row, 19),
+            "licenses": _json_list(_value(row, 20)), "attributions": _json_list(_value(row, 21)),
         }
         stores_by_id[store_id] = store
         state["stores"].append(store)
@@ -149,7 +159,7 @@ def load_state() -> dict:
         run_key = store.get("last_snapshot_key")
         run = run_by_key.get(run_key, {})
         observation_id = store.get("last_observation_id") or f"baseline:{store['id']}"
-        observation = {"id": observation_id, "store_id": store["id"], "snapshot_run_id": run_key or "", "source": store["source"], "source_store_id": store.get("source_store_id"), "observed_name": store["canonical_name"], "observed_address": store["address"], "lat": store["lat"], "lng": store["lng"], "source_category": None, "source_business_type": None, "licenses": [], "attributions": [], "raw_payload": {}, "fetched_at": store.get("last_observed_at"), "observed_at": store.get("last_observed_at") or store["last_seen_at"]}
+        observation = {"id": observation_id, "store_id": store["id"], "snapshot_run_id": run_key or "", "source": store["source"], "source_store_id": store.get("source_store_id"), "observed_name": store["canonical_name"], "observed_address": store["address"], "lat": store["lat"], "lng": store["lng"], "source_category": store.get("source_category"), "source_business_type": store.get("source_business_type"), "licenses": store.get("licenses", []), "attributions": store.get("attributions", []), "raw_payload": {}, "fetched_at": store.get("last_observed_at"), "observed_at": store.get("last_observed_at") or store["last_seen_at"]}
         state["observations"].append(observation)
     for row in rows["Changes"]:
         store_id = str(_value(row, 1, ""))
@@ -180,7 +190,7 @@ def _cell(value: Any) -> Any:
 
 def _rows(name: str, objects: list[dict]) -> list[list[Any]]:
     keys = {
-        "Stores": ["id", "brand_family", "canonical_name", "address", "prefecture", "city", "lat", "lng", "current_presence", "missing_count", "first_seen_at", "last_seen_at", "last_snapshot_key", "source", "source_store_id", "updated_at", "last_observation_id", "last_observed_at"],
+        "Stores": ["id", "brand_family", "canonical_name", "address", "prefecture", "city", "lat", "lng", "current_presence", "missing_count", "first_seen_at", "last_seen_at", "last_snapshot_key", "source", "source_store_id", "updated_at", "last_observation_id", "last_observed_at", "source_category", "source_business_type", "licenses", "attributions"],
         "Changes": ["id", "store_id", "observed_at", "change_type", "brand_family", "observed_name", "observed_address", "prefecture", "city", "lat", "lng", "source", "source_store_id", "snapshot_key"],
         "ClosureEvents": ["id", "store_id", "detected_at", "last_seen_at", "status", "closure_date", "reason", "confidence", "nearest_seven_store_id", "nearest_seven_name", "distance_m", "within_100m", "last_observation_id", "created_at", "updated_at"],
         "Evidence": ["id", "closure_event_id", "evidence_type", "title", "source_ref", "evidence_date", "summary", "supports_closure", "created_at"],
@@ -202,10 +212,19 @@ def _ensure_capacity(row_counts: dict[str, int]) -> None:
     for sheet in metadata.get("sheets", []):
         properties = sheet.get("properties", {})
         title = properties.get("title")
-        needed = row_counts.get(title, 0)
-        current = properties.get("gridProperties", {}).get("rowCount", 0)
-        if needed > current:
-            requests.append({"updateSheetProperties": {"properties": {"sheetId": properties["sheetId"], "gridProperties": {"rowCount": needed}}, "fields": "gridProperties.rowCount"}})
+        grid = properties.get("gridProperties", {})
+        needed_rows = row_counts.get(title, 0)
+        needed_columns = len(HEADERS.get(title, []))
+        target = {}
+        fields = []
+        if needed_rows > grid.get("rowCount", 0):
+            target["rowCount"] = needed_rows
+            fields.append("gridProperties.rowCount")
+        if needed_columns > grid.get("columnCount", 0):
+            target["columnCount"] = needed_columns
+            fields.append("gridProperties.columnCount")
+        if fields:
+            requests.append({"updateSheetProperties": {"properties": {"sheetId": properties["sheetId"], "gridProperties": target}, "fields": ",".join(fields)}})
     if requests:
         _request(":batchUpdate", method="POST", body={"requests": requests})
 
@@ -235,7 +254,10 @@ def save_state(state: dict) -> None:
         if previous is None:
             kind = "BASELINE" if len(state.get("_previous_stores", [])) == 0 else "NEW_STORE"
         elif previous.get("current_presence") != store.get("current_presence"):
-            kind = "REOPENED" if store.get("current_presence") == "PRESENT" else "MISSING"
+            if store.get("current_presence") == "SUPPRESSED":
+                kind = "OUT_OF_SCOPE"
+            else:
+                kind = "REOPENED" if store.get("current_presence") == "PRESENT" else "MISSING"
         elif any(previous.get(key) != store.get(key) for key in ("canonical_name", "address", "lat", "lng", "prefecture", "city")):
             kind = "STORE_UPDATED"
         else:
@@ -249,6 +271,8 @@ def save_state(state: dict) -> None:
     existing = state.get("_sheet_row_counts", {})
     change_count = len(state.get("changes", [])) if state.get("_replace_changes") else int(existing.get("Changes", 0)) + len(appended)
     _ensure_capacity({"Stores": len(store_rows) + 1, "Changes": change_count + 1, "ClosureEvents": len(state["events"]) + 1, "Evidence": len(state["evidence"]) + 1, "SnapshotRuns": len(state["runs"]) + 1})
+    for sheet, headers in HEADERS.items():
+        _values_update(sheet, 1, [headers])
     # Fixed-size slices keep every request small and make a retry idempotently rewrite the same rows.
     for offset in range(0, len(store_rows), _WRITE_CHUNK_ROWS):
         _values_update("Stores", offset + 2, store_rows[offset:offset + _WRITE_CHUNK_ROWS])

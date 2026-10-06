@@ -261,7 +261,9 @@ def main() -> None:
     if args.command == "migrate":
         with connect(os.environ["DATABASE_URL"]) as connection:
             with connection.cursor() as cursor:
-                cursor.execute((ROOT / "supabase" / "migrations" / "202610040001_initial.sql").read_text(encoding="utf-8"))
+                migrations = sorted((ROOT / "supabase" / "migrations").glob("*.sql"))
+                for migration in migrations:
+                    cursor.execute(migration.read_text(encoding="utf-8"))
         print(json.dumps({"status": "migrated"}))
         return
     if args.command == "migrate-to-sheets":

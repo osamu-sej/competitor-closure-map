@@ -1,4 +1,5 @@
 import io
+import json
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -21,6 +22,29 @@ class FakeResponse:
 
 
 class SheetsStorageTests(unittest.TestCase):
+    def test_lawson_source_metadata_round_trips_in_store_sheet(self):
+        store = {
+            "id": "lawson-1", "brand_family": "LAWSON", "canonical_name": "ローソン 横浜店",
+            "address": "神奈川県横浜市中区1", "prefecture": "神奈川県", "city": "横浜市中区",
+            "lat": 35.4, "lng": 139.4, "current_presence": "PRESENT", "missing_count": 0,
+            "first_seen_at": "2026-10-07T00:00:00Z", "last_seen_at": "2026-10-07T00:00:00Z",
+            "source": "overture", "source_category": "convenience_store",
+            "source_business_type": None, "licenses": ["CC-BY-4.0"],
+            "attributions": ["Overture Maps Foundation"],
+        }
+        row = sheets_storage._rows("Stores", [store])[0]
+        empty = {name: [] for name in sheets_storage.HEADERS}
+        empty["Stores"] = [row]
+        with patch.object(sheets_storage, "_read_ranges", return_value=empty):
+            restored = sheets_storage.load_state()
+
+        self.assertEqual(len(sheets_storage.HEADERS["Stores"]), 22)
+        self.assertEqual(row[18], "convenience_store")
+        self.assertEqual(json.loads(row[20]), ["CC-BY-4.0"])
+        self.assertEqual(restored["stores"][0]["source_category"], "convenience_store")
+        self.assertEqual(restored["observations"][0]["licenses"], ["CC-BY-4.0"])
+        self.assertEqual(restored["observations"][0]["attributions"], ["Overture Maps Foundation"])
+
     def test_request_retries_rate_limit_and_returns_response(self):
         rate_limited = HTTPError("https://sheets.example", 429, "Too Many Requests", {"Retry-After": "0"}, io.BytesIO())
         with patch.dict("os.environ", {"SHEETS_SPREADSHEET_ID": "sheet-id"}), \

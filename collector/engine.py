@@ -43,20 +43,24 @@ def apply_snapshot(state: dict, source, snapshot_key: str, observed_at: str, mis
             raise RuntimeError(f"No {family} stores returned; refusing incomplete snapshot")
         family_counts[family] = len(family_rows)
         fetched += family_rows
+    managed_presence_families = set(getattr(source, "managed_presence_families", set()))
+    coverage_policy_version = str(getattr(source, "coverage_policy_version", "default"))
     source_name = source.__class__.__name__.replace("Source", "").lower()
     prior_run = next((r for r in reversed(state["runs"]) if r["source"] == source_name and r["prefecture"] == prefecture and r["status"] == "succeeded"), None)
     if prior_run and getattr(source, "guard_coverage", False):
         previous = prior_run.get("metadata", {}).get("families", {})
+        previous_policy_version = str(prior_run.get("metadata", {}).get("coverage_policy_version", "default"))
         for family, count in family_counts.items():
             previous_count = previous.get(family, 0)
-            if previous_count and count < previous_count - max(1, ceil(previous_count * 0.05)):
+            policy_changed_for_family = family in managed_presence_families and previous_policy_version != coverage_policy_version
+            if not policy_changed_for_family and previous_count and count < previous_count - max(1, ceil(previous_count * 0.05)):
                 raise RuntimeError(f"{family} coverage fell from {previous[family]} to {count}; refusing incomplete snapshot")
     # Fetch completes before mutation; a failed source never creates a partial run.
     run = {"id": str(uuid4()), "snapshot_key": snapshot_key, "source": source_name, "prefecture": prefecture, "started_at": utc_now(), "finished_at": None, "status": "running", "store_count": 0, "metadata": {}}
     source_run_ids = {r["id"] for r in state["runs"] if r["source"] == source_name and r["prefecture"] == prefecture and r["status"] == "succeeded"}
     prior_ids = {observation["store_id"] for observation in state["observations"] if observation["snapshot_run_id"] in source_run_ids}
     observed_ids: set[str] = set()
-    counts = {"fetched": len(fetched), "families": family_counts, "requests": getattr(source, "requests", None), "normalized": 0, "matched": 0, "new": 0, "missing": 0, "seven_missing": 0, "reopened": 0, "closure_candidates": 0}
+    counts = {"fetched": len(fetched), "families": family_counts, "coverage_policy_version": coverage_policy_version, "requests": getattr(source, "requests", None), "normalized": 0, "matched": 0, "new": 0, "missing": 0, "out_of_scope": 0, "seven_missing": 0, "reopened": 0, "closure_candidates": 0}
     # Most stores have a usable address. Index that and nearby coordinate cells
     # so a prefecture-sized snapshot does not compare every pair of stores.
     by_address: dict[tuple[str, str], list[dict]] = {}
@@ -81,7 +85,9 @@ def apply_snapshot(state: dict, source, snapshot_key: str, observed_at: str, mis
                   for store in by_cell.get((family, lat_cell + lat_offset, lng_cell + lng_offset), [])]
         possible = by_address.get((family, address), []) + nearby if address else nearby
         candidates = [store for store in {s["id"]: s for s in possible}.values()
-                      if store["id"] not in observed_ids and store["source"] == raw.source and matches(raw, store, family)]
+                      if store["id"] not in observed_ids
+                      and (store["source"] == raw.source or (family in managed_presence_families and store["source"] == "openpoi" and raw.source == "overture"))
+                      and matches(raw, store, family)]
         # A mall or station can contain multiple same-brand shops with the same
         # normalized address. Resolve an exact name and nearby position first;
         # address-only matching must remain unique.
@@ -94,12 +100,12 @@ def apply_snapshot(state: dict, source, snapshot_key: str, observed_at: str, mis
             if store["current_presence"] != "PRESENT":
                 counts["reopened"] += 1
                 for event in state["events"]:
-                    if event["store_id"] == store["id"] and event["status"] not in ("REOPENED",):
+                    if event["store_id"] == store["id"] and event["status"] not in ("REOPENED", "OUT_OF_SCOPE"):
                         event["status"] = "REOPENED"
                         event["updated_at"] = observed_at
-            store.update(canonical_name=raw.name, normalized_name=normalize_name(raw.name), address=raw.address, normalized_address=normalize_address(raw.address), city=raw.city, lat=raw.lat, lng=raw.lng, source=raw.source, source_store_id=raw.source_store_id, last_seen_at=observed_at, current_presence="PRESENT", missing_count=0, updated_at=observed_at)
+            store.update(canonical_name=raw.name, normalized_name=normalize_name(raw.name), address=raw.address, normalized_address=normalize_address(raw.address), city=raw.city, lat=raw.lat, lng=raw.lng, source=raw.source, source_store_id=raw.source_store_id, source_category=raw.source_category, source_business_type=raw.source_business_type, licenses=list(raw.licenses), attributions=list(raw.attributions), last_seen_at=observed_at, current_presence="PRESENT", missing_count=0, updated_at=observed_at)
         else:
-            store = {"id": str(uuid4()), "brand_family": family, "canonical_name": raw.name, "normalized_name": normalize_name(raw.name), "address": raw.address, "normalized_address": normalize_address(raw.address), "prefecture": raw.prefecture, "city": raw.city, "lat": raw.lat, "lng": raw.lng, "source": raw.source, "source_store_id": raw.source_store_id, "first_seen_at": observed_at, "last_seen_at": observed_at, "current_presence": "PRESENT", "missing_count": 0, "created_at": observed_at, "updated_at": observed_at}
+            store = {"id": str(uuid4()), "brand_family": family, "canonical_name": raw.name, "normalized_name": normalize_name(raw.name), "address": raw.address, "normalized_address": normalize_address(raw.address), "prefecture": raw.prefecture, "city": raw.city, "lat": raw.lat, "lng": raw.lng, "source": raw.source, "source_store_id": raw.source_store_id, "source_category": raw.source_category, "source_business_type": raw.source_business_type, "licenses": list(raw.licenses), "attributions": list(raw.attributions), "first_seen_at": observed_at, "last_seen_at": observed_at, "current_presence": "PRESENT", "missing_count": 0, "created_at": observed_at, "updated_at": observed_at}
             state["stores"].append(store)
             index_store(store)
             counts["new"] += 1
@@ -112,7 +118,16 @@ def apply_snapshot(state: dict, source, snapshot_key: str, observed_at: str, mis
             counts["seven_missing"] += 1
     sevens = [s for s in state["stores"] if s["brand_family"] == "SEVEN_ELEVEN" and s["current_presence"] == "PRESENT"]
     for store in state["stores"]:
-        if store["id"] not in prior_ids or store["id"] in observed_ids or store["brand_family"] == "SEVEN_ELEVEN":
+        if store["id"] not in prior_ids or store["id"] in observed_ids or store["brand_family"] == "SEVEN_ELEVEN" or store["current_presence"] == "SUPPRESSED":
+            continue
+        if store["brand_family"] in managed_presence_families and (
+            store.get("source") != "overture" or store.get("source_category") != "convenience_store"
+        ):
+            store.update(current_presence="SUPPRESSED", missing_count=0, updated_at=observed_at)
+            for event in state["events"]:
+                if event["store_id"] == store["id"] and event["status"] != "OUT_OF_SCOPE":
+                    event.update(status="OUT_OF_SCOPE", reason="LAWSON対象データを実店舗カテゴリに限定", updated_at=observed_at)
+            counts["out_of_scope"] += 1
             continue
         store["current_presence"] = "MISSING"
         store["missing_count"] = store.get("missing_count", 0) + 1
@@ -135,12 +150,12 @@ def apply_snapshot(state: dict, source, snapshot_key: str, observed_at: str, mis
 
 def add_evidence(state: dict, store_name: str, evidence: dict) -> None:
     store = next(s for s in state["stores"] if s["canonical_name"] == store_name)
-    event = next(e for e in state["events"] if e["store_id"] == store["id"] and e["status"] != "REOPENED")
+    event = next(e for e in state["events"] if e["store_id"] == store["id"] and e["status"] not in ("REOPENED", "OUT_OF_SCOPE"))
     add_event_evidence(state, event["id"], evidence)
 
 
 def add_event_evidence(state: dict, event_id: str, evidence: dict) -> None:
-    event = next(e for e in state["events"] if e["id"] == event_id and e["status"] != "REOPENED")
+    event = next(e for e in state["events"] if e["id"] == event_id and e["status"] not in ("REOPENED", "OUT_OF_SCOPE"))
     if any(e["closure_event_id"] == event["id"] and e["title"] == evidence["title"] for e in state["evidence"]):
         return
     row = {"id": str(uuid4()), "closure_event_id": event["id"], "evidence_type": evidence["evidence_type"], "title": evidence["title"], "source_ref": evidence.get("source_ref"), "evidence_date": evidence.get("evidence_date"), "summary": evidence.get("summary", ""), "supports_closure": evidence.get("supports_closure", False), "created_at": utc_now()}

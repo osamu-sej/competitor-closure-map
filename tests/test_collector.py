@@ -77,26 +77,61 @@ class CollectorTests(unittest.TestCase):
 
     def test_openpoi_saturated_bbox_recurses_and_deduplicates(self):
         source=OpenPoiSource(limit=2,max_depth=2)
-        row={'name':'ローソン A','address':'神奈川県横浜市中区1','lat':35.4,'lng':139.4,'prefecture':'神奈川県','city':'横浜市中区','source':'overture','licenses':['Apache-2.0'],'attributions':['Overture Maps Foundation']}
+        row={'name':'ローソン A','address':'神奈川県横浜市中区1','lat':35.4,'lng':139.4,'prefecture':'神奈川県','city':'横浜市中区','source':'overture','category':'convenience_store','licenses':['Apache-2.0'],'attributions':['Overture Maps Foundation']}
         with patch.object(source,'_search',side_effect=[[row,row],[row],[],[],[],[],[]]) as search:
             rows=source.fetch_stores('神奈川県','LAWSON')
         self.assertEqual(len(rows),1)
         self.assertGreaterEqual(search.call_count,5)
         self.assertEqual(rows[0].licenses,['Apache-2.0'])
 
-    def test_openpoi_merges_nearby_duplicate_sources_with_provenance(self):
+    def test_lawson_search_filters_other_sources_before_deduplication(self):
         source=OpenPoiSource()
-        first={'name':'ローソン 横浜店','address':'','lat':35.4,'lng':139.4,'prefecture':'神奈川県','source':'overture','licenses':['Apache-2.0']}
-        second={**first,'address':'神奈川県横浜市中区1','lng':139.4001,'source':'jff','licenses':['CC-BY-4.0']}
+        first={'name':'ローソン 横浜店','address':'','lat':35.4,'lng':139.4,'prefecture':'神奈川県','source':'overture','category':'convenience_store','licenses':['Apache-2.0']}
+        second={**first,'address':'神奈川県横浜市中区1','lng':139.4001,'source':'jff','category':'restaurant','licenses':['CC-BY-4.0']}
         with patch.object(source,'_partition',side_effect=[[first],[second]]):
             rows=source.fetch_stores('神奈川県','LAWSON')
         self.assertEqual(len(rows),1)
-        self.assertEqual(rows[0].address,second['address'])
-        self.assertEqual(len(rows[0].raw_payload['records']),2)
-        self.assertEqual(set(rows[0].licenses),{'Apache-2.0','CC-BY-4.0'})
+        self.assertEqual(rows[0].address,'')
+        self.assertEqual(rows[0].source,'overture')
+        self.assertEqual(rows[0].source_category,'convenience_store')
+        self.assertEqual(rows[0].licenses,['Apache-2.0'])
+
+    def test_lawson_search_keeps_only_overture_convenience_store_pois(self):
+        source=OpenPoiSource()
+        rows=[
+            RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='overture',source_category='convenience_store'),
+            RawStore('ローソン銀行','神奈川県横浜市中区2',35.4,139.401,source='overture',source_category='service_other'),
+            RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='jff',source_category='restaurant'),
+        ]
+        with patch.object(source,'_fetch_family',return_value=rows):
+            found=source.fetch_stores('神奈川県','LAWSON')
+        self.assertEqual(found,[rows[0]])
+
+    def test_lawson_policy_suppresses_legacy_candidates_without_false_closures(self):
+        active=RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='overture',source_category='convenience_store')
+        legacy_active=RawStore(active.name,active.address,active.lat,active.lng,source='openpoi',source_category='convenience_store')
+        bank=RawStore('ローソン銀行','神奈川県横浜市中区2',35.4,139.401,source='openpoi',source_category='service_other')
+        permit=RawStore('ローソン 許可記録','神奈川県横浜市中区3',35.4,139.402,source='openpoi',source_category='restaurant')
+        state=new_state()
+        source=InlineSource([legacy_active,bank,permit])
+        apply_snapshot(state,source,'legacy','2026-10-01T00:00:00Z')
+        source.rows=[legacy_active]
+        apply_snapshot(state,source,'legacy-missing','2026-10-02T00:00:00Z')
+        self.assertEqual({event['status'] for event in state['events']},{'MISSING'})
+        source.rows=[active]
+        source.managed_presence_families={'LAWSON'}
+        source.coverage_policy_version='lawson-overture-convenience-store-v1'
+        run=apply_snapshot(state,source,'curated','2026-10-08T00:00:00Z')
+        stores={store['source']+':'+str(store['source_category']):store for store in state['stores']}
+        self.assertEqual(stores['overture:convenience_store']['current_presence'],'PRESENT')
+        self.assertEqual(stores['openpoi:service_other']['current_presence'],'SUPPRESSED')
+        self.assertEqual(stores['openpoi:restaurant']['current_presence'],'SUPPRESSED')
+        self.assertEqual(run['metadata']['missing'],0)
+        self.assertEqual(run['metadata']['out_of_scope'],2)
+        self.assertEqual({event['status'] for event in state['events']},{'OUT_OF_SCOPE'})
 
     def test_openpoi_retry_uses_complete_local_cache(self):
-        row=RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='openpoi')
+        row=RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='overture',source_category='convenience_store')
         with TemporaryDirectory() as directory:
             first=OpenPoiSource(cache_key='week-1',cache_dir=Path(directory))
             with patch.object(first,'_fetch_family',return_value=[row]) as fetch:
@@ -107,7 +142,7 @@ class CollectorTests(unittest.TestCase):
                 self.assertEqual(retry.fetch_stores('神奈川県','LAWSON'),[row])
 
     def test_openpoi_keyword_change_invalidates_cache(self):
-        row=RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='openpoi')
+        row=RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='overture',source_category='convenience_store')
         with TemporaryDirectory() as directory:
             first=OpenPoiSource(cache_key='week-1',cache_dir=Path(directory))
             with patch.object(first,'_fetch_family',return_value=[row]):
@@ -117,6 +152,17 @@ class CollectorTests(unittest.TestCase):
                 with patch.object(changed,'_fetch_family',return_value=[row]) as fetch:
                     changed.fetch_stores('神奈川県','LAWSON')
                     self.assertEqual(fetch.call_count,1)
+
+    def test_openpoi_legacy_lawson_cache_is_refetched_for_policy_change(self):
+        with TemporaryDirectory() as directory:
+            source=OpenPoiSource(cache_key='same-key',cache_dir=Path(directory))
+            cache_path=source._cache_path('LAWSON')
+            cache_path.parent.mkdir(parents=True,exist_ok=True)
+            cache_path.write_text(json.dumps({"version":2,"base_url":source.base_url,"keywords":KEYWORDS['LAWSON'],"stores":[{"name":"ローソン 横浜店","address":"神奈川県横浜市中区1","lat":35.4,"lng":139.4,"prefecture":"神奈川県","source":"openpoi","source_category":"convenience_store"}]}),encoding='utf-8')
+            current=RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='overture',source_category='convenience_store')
+            with patch.object(source,'_fetch_family',return_value=[current]) as fetch:
+                self.assertEqual(source.fetch_stores('神奈川県','LAWSON'),[current])
+                self.assertEqual(fetch.call_count,1)
 
     def test_prefecture_snapshots_do_not_mark_other_prefectures_missing(self):
         kanagawa=[RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.6,prefecture='神奈川県')]
