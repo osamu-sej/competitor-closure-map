@@ -9,6 +9,7 @@ from .matching import distance_m, matches
 from .model import FAMILIES, RawStore
 from .normalization import brand_family, normalize_address, normalize_name
 from .prefectures import PREFECTURES
+from .source_policy import is_overture_backed_convenience_store
 
 
 def utc_now() -> str:
@@ -125,7 +126,11 @@ def apply_snapshot(state: dict, source, snapshot_key: str, observed_at: str, mis
         possible = by_address.get((family, address), []) + nearby if address else nearby
         candidates = [store for store in {s["id"]: s for s in possible}.values()
                       if store["id"] not in observed_ids
-                      and (store["source"] == raw.source or (family in managed_presence_families and store["source"] == "openpoi" and raw.source == "overture"))
+                      and (store["source"] == raw.source or (
+                          family in managed_presence_families
+                          and store["source"] in ("openpoi", "overture", "jff")
+                          and raw.source in ("overture", "jff")
+                      ))
                       and matches(raw, store, family)]
         # A mall or station can contain multiple same-brand shops with the same
         # normalized address. Resolve an exact name and nearby position first;
@@ -153,13 +158,13 @@ def apply_snapshot(state: dict, source, snapshot_key: str, observed_at: str, mis
     for store in state["stores"]:
         if store["id"] not in prior_ids or store["id"] in observed_ids or store["current_presence"] == "SUPPRESSED":
             continue
-        if store["brand_family"] in managed_presence_families and (
-            store.get("source") != "overture" or store.get("source_category") != "convenience_store"
+        if store["brand_family"] in managed_presence_families and not is_overture_backed_convenience_store(
+            store.get("source"), store.get("source_category"), store.get("attributions")
         ):
             store.update(current_presence="SUPPRESSED", missing_count=0, updated_at=observed_at)
             for event in state["events"]:
                 if event["store_id"] == store["id"] and event["status"] != "OUT_OF_SCOPE":
-                    event.update(status="OUT_OF_SCOPE", reason="対象ブランドの候補を実店舗POIに限定", updated_at=observed_at)
+                    event.update(status="OUT_OF_SCOPE", reason="対象ブランドの候補をコンビニカテゴリとOverture出典に限定", updated_at=observed_at)
             counts["out_of_scope"] += 1
             continue
     for store in state["stores"]:

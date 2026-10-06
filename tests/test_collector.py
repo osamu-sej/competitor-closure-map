@@ -124,11 +124,28 @@ class CollectorTests(unittest.TestCase):
         }
         for family,(store_name,service_name) in samples.items():
             actual=RawStore(store_name,'神奈川県横浜市中区1',35.4,139.4,source='overture',source_category='convenience_store')
+            merged_source=RawStore(store_name+' JFF','神奈川県横浜市中区2',35.4,139.401,source='jff',source_category='convenience_store',attributions=['Overture Maps Foundation','厚生労働省 食品衛生申請等システム'])
+            permit_only=RawStore(store_name+' 許可記録','神奈川県横浜市中区3',35.4,139.402,source='jff',source_category='convenience_store',attributions=['厚生労働省 食品衛生申請等システム'])
             rows=[actual,
+                  merged_source,
+                  permit_only,
                   RawStore(service_name,'神奈川県横浜市中区2',35.4,139.401,source='overture',source_category='service_other'),
                   RawStore(store_name,'神奈川県横浜市中区1',35.4,139.4,source='jff',source_category='restaurant')]
             with self.subTest(family=family),patch.object(source,'_fetch_family',return_value=rows):
-                self.assertEqual(source.fetch_stores('神奈川県',family),[actual])
+                self.assertEqual(source.fetch_stores('神奈川県',family),[actual,merged_source])
+
+    def test_openpoi_merges_overture_backed_jff_record_before_deduplication(self):
+        source=OpenPoiSource()
+        overture={'name':'ファミリーマート 横浜店','address':'神奈川県横浜市中区1','lat':35.4,'lng':139.4,'prefecture':'神奈川県','source':'overture','category':'convenience_store','licenses':['Apache-2.0'],'attributions':['Overture Maps Foundation']}
+        merged={**overture,'source':'jff','licenses':['PDL1.0'],'attributions':['Overture Maps Foundation','厚生労働省 食品衛生申請等システム']}
+        permit_only={**overture,'name':'ファミリーマート 届出だけの候補','source':'jff','licenses':['PDL1.0'],'attributions':['厚生労働省 食品衛生申請等システム']}
+        with patch.dict(KEYWORDS,{'FAMILY_MART':['ファミリーマート']}),patch.object(source,'_partition',return_value=[overture,merged,permit_only]):
+            rows=source._fetch_family('FAMILY_MART')
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0].source,'overture')
+        self.assertCountEqual(rows[0].licenses,['Apache-2.0','PDL1.0'])
+        self.assertIn('Overture Maps Foundation',rows[0].attributions)
+        self.assertIn('厚生労働省 食品衛生申請等システム',rows[0].attributions)
 
     def test_new_policy_suppresses_legacy_candidates_for_all_brands(self):
         rows=[
@@ -145,7 +162,7 @@ class CollectorTests(unittest.TestCase):
 
         source=InlineSource([rows[0],rows[2]])
         source.managed_presence_families=set(KEYWORDS)
-        source.coverage_policy_version='overture-convenience-store-v2'
+        source.coverage_policy_version='overture-attributed-convenience-store-v3'
         run=apply_snapshot(state,source,'curated','2026-10-03T00:00:00Z')
 
         suppressed={store['canonical_name']:store for store in state['stores'] if store['current_presence']=='SUPPRESSED'}
@@ -156,10 +173,26 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(run['metadata']['closure_candidates'],0)
         out_of_scope_events=[event for event in state['events'] if event['status']=='OUT_OF_SCOPE']
         self.assertEqual(len(out_of_scope_events),2)
-        self.assertEqual({event['reason'] for event in out_of_scope_events},{'対象ブランドの候補を実店舗POIに限定'})
+        self.assertEqual({event['reason'] for event in out_of_scope_events},{'対象ブランドの候補をコンビニカテゴリとOverture出典に限定'})
         seven=next(store for store in state['stores'] if store['canonical_name']=='セブン-イレブン 横浜店')
         self.assertEqual(seven['current_presence'],'MISSING')
         self.assertEqual(len([event for event in state['events'] if event['store_id']==seven['id']]),0)
+
+    def test_overture_attributed_jff_source_does_not_suppress_legacy_store(self):
+        legacy=RawStore('セブン-イレブン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='openpoi',source_category='convenience_store',attributions=['Overture Maps Foundation','厚生労働省 食品衛生申請等システム'])
+        current=RawStore(legacy.name,legacy.address,legacy.lat,legacy.lng,source='jff',source_category='convenience_store',attributions=legacy.attributions)
+        state=new_state()
+        apply_snapshot(state,InlineSource([legacy]),'legacy-overture-backed','2026-10-01T00:00:00Z')
+        source=InlineSource([current])
+        source.managed_presence_families={'SEVEN_ELEVEN'}
+        source.coverage_policy_version='overture-attributed-convenience-store-v3'
+        run=apply_snapshot(state,source,'current-overture-backed','2026-10-02T00:00:00Z')
+        store=state['stores'][0]
+        self.assertEqual(store['current_presence'],'PRESENT')
+        self.assertEqual(store['source'],'jff')
+        self.assertEqual(run['metadata']['out_of_scope'],0)
+        self.assertEqual(run['metadata']['missing'],0)
+        self.assertEqual(state['events'],[])
 
     def test_lawson_policy_suppresses_legacy_candidates_without_false_closures(self):
         active=RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='overture',source_category='convenience_store')

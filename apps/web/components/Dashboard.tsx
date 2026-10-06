@@ -59,7 +59,7 @@ export default function Dashboard(){
         <div className="brand-benchmarks">{nationalBenchmarks.map(row=><div key={row.family}><b>{row.label}</b>　{prefecture?<>県内候補 {row.candidate.toLocaleString()}件（全国公式 {row.official.toLocaleString()}店）</>:<>候補 {row.candidate.toLocaleString()}件 / 公式 {row.official.toLocaleString()}店 / 差 {row.delta>0?'+':''}{row.delta.toLocaleString()}件（{row.deltaPercent.toFixed(1)}%）</>}　<a href={row.source||'#'} target="_blank" rel="noreferrer">公式 ↗</a></div>)}</div>
         {prefecture&&<div>県別候補と全国公式値は集計範囲が異なるため、差分比較は全国表示で確認してください。</div>}
       </>: '収録件数を読み込み中です。'}
-      <div>候補はOverture由来でカテゴリが <code>convenience_store</code> のPOIです。公式店舗名簿との1店ずつの照合や、営業中であることを保証した数字ではありません。</div>
+      <div>候補はカテゴリが <code>convenience_store</code> で、代表ソースまたは統合出典にOvertureを含むPOIです。JFF由来だけの営業許可・届出候補は除いています。公式店舗名簿との1店ずつの照合や、営業中であることを保証した数字ではありません。</div>
       <div>ローソン店名内訳：{lawsonBreakdown||'分類中'}（ローソングループ公式値にはナチュラルローソン・ローソンストア100等を含む）。最寄りセブンは収録候補内の暫定値です。</div>
       <a href="https://github.com/osamu-sej/competitor-closure-map/blob/main/docs/brand-count-audit-2026-10-07.md" target="_blank" rel="noreferrer">3社の件数調査・判定条件 ↗</a>
     </span></div>}

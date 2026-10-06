@@ -14,6 +14,7 @@ from collector.model import RawStore
 from collector.matching import distance_m
 from collector.normalization import brand_family as detect_brand, normalize_name
 from collector.prefectures import PREFECTURES
+from collector.source_policy import is_overture_backed_convenience_store
 from .base import StoreSource
 
 
@@ -31,7 +32,7 @@ class OpenPoiSource(StoreSource):
     require_nonempty_each_family = False
     guard_coverage = True
     managed_presence_families = set(KEYWORDS)
-    coverage_policy_version = "overture-convenience-store-v2"
+    coverage_policy_version = "overture-attributed-convenience-store-v3"
 
     def __init__(self, base_url: str | None = None, limit: int = 200, max_depth: int = 12, cache_key: str | None = None, cache_dir: Path | None = None):
         self.base_url = (base_url or os.getenv("OPENPOI_BASE_URL", "https://api.openpoiapi.com")).rstrip("/")
@@ -115,7 +116,7 @@ class OpenPoiSource(StoreSource):
         # chains. Name-only search also returns permits, ATMs, lockers, and
         # other non-store points.
         stores = [store for store in self.cache[brand_family]
-                  if store.source == "overture" and store.source_category == "convenience_store"]
+                  if is_overture_backed_convenience_store(store.source, store.source_category, store.attributions)]
         return [store for store in stores if store.prefecture == prefecture]
 
     def _fetch_family(self, brand_family: str) -> list[RawStore]:
@@ -124,12 +125,11 @@ class OpenPoiSource(StoreSource):
         by_name: dict[tuple[str, str], list[int]] = {}
         for keyword in KEYWORDS[brand_family]:
             for row in self._partition(keyword, JAPAN_BBOX):
-                if not (
-                    row.get("source") == "overture" and row.get("category") == "convenience_store"
-                ):
-                    # Filter before cross-source deduplication so permits,
-                    # service points, and secondary datasets cannot replace
-                    # the actual map POI for any chain.
+                attributions = row.get("attributions") or []
+                if not is_overture_backed_convenience_store(row.get("source"), row.get("category"), attributions):
+                    # Keep POIs backed by Overture even when a permit dataset is
+                    # the API's representative source. Exclude permit-only and
+                    # service-point rows before cross-source deduplication.
                     continue
                 prefecture = row.get("prefecture")
                 if prefecture not in PREFECTURES:
@@ -163,7 +163,7 @@ class OpenPoiSource(StoreSource):
                         raw_payload={"records": records + [row]})
                     continue
                 by_name.setdefault(name_key, []).append(len(stores))
-                stores.append(RawStore(name=row["name"], address=row.get("address", ""), lat=row["lat"], lng=row["lng"], prefecture=prefecture, city=row.get("city", ""), source="overture", source_store_id=row.get("source_store_id"), source_category=row.get("category"), source_business_type=row.get("business_type"), licenses=row.get("licenses") or [], attributions=row.get("attributions") or [], raw_payload=row))
+                stores.append(RawStore(name=row["name"], address=row.get("address", ""), lat=row["lat"], lng=row["lng"], prefecture=prefecture, city=row.get("city", ""), source=str(row.get("source") or "openpoi"), source_store_id=row.get("source_store_id"), source_category=row.get("category"), source_business_type=row.get("business_type"), licenses=row.get("licenses") or [], attributions=attributions, raw_payload=row))
         if not stores:
             raise RuntimeError(f"No {brand_family} stores found in Japan; refusing incomplete snapshot")
         print(f"OpenPOI {brand_family}: {len(stores)} stores ({self.requests} requests total)", flush=True)
