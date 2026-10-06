@@ -8,6 +8,7 @@ from collector.engine import add_evidence, apply_snapshot, new_state, promotion_
 from collector.matching import matches
 from collector.model import RawStore
 from collector.normalization import brand_family, normalize_address, normalize_name
+from collector.prefectures import PREFECTURES
 from collector.sources.fixture import FixtureSource
 from collector.sources.openpoi import KEYWORDS, OpenPoiSource
 
@@ -200,6 +201,45 @@ class CollectorTests(unittest.TestCase):
             apply_snapshot(state,GuardedSource(stores[:30]),'two','2026-10-08T00:00:00Z')
         self.assertEqual(len(state['runs']),1)
         self.assertEqual(len(state['events']),0)
+
+    def test_national_coverage_allows_small_regional_swing_but_blocks_national_drop(self):
+        class GuardedNationwideSource(InlineSource):
+            guard_coverage=True
+            managed_presence_families={'LAWSON'}
+            coverage_policy_version='lawson-overture-convenience-store-v1'
+            def __init__(self, rows, totals):
+                super().__init__(rows)
+                self.totals=totals
+            def coverage_counts(self): return self.totals
+
+        prefecture='東京都'
+        state=new_state()
+        state['runs']=[{
+            'id':f'baseline-{index}', 'snapshot_key':f'baseline-{index}',
+            'source':'guardednationwide', 'prefecture':name,
+            'status':'succeeded', 'finished_at':'2026-10-01T00:00:00Z',
+            'metadata':{'families':{'FAMILY_MART':1000,'LAWSON':574,'SEVEN_ELEVEN':500},
+                        'coverage_policy_version':'default'},
+        } for index,name in enumerate(PREFECTURES)]
+        regional_rows=[RawStore(f'ファミリーマート 店{i}',f'東京都住所{i}',35.0+i/100000,139.0,prefecture=prefecture) for i in range(930)]
+        regional_rows += [RawStore(f'セブン-イレブン 店{i}',f'東京都七住所{i}',36.0+i/100000,140.0,prefecture=prefecture) for i in range(500)]
+        tolerant=GuardedNationwideSource(regional_rows,{'FAMILY_MART':46930,'LAWSON':14224,'SEVEN_ELEVEN':23500})
+        run=apply_snapshot(state,tolerant,'regional-swing','2026-10-08T00:00:00Z',prefecture=prefecture)
+        self.assertEqual(run['metadata']['families']['FAMILY_MART'],930)
+        self.assertEqual(run['metadata']['new'],1430)
+
+        state=new_state()
+        state['runs']=[{
+            'id':f'baseline-{index}', 'snapshot_key':f'baseline-{index}',
+            'source':'guardednationwide', 'prefecture':name,
+            'status':'succeeded', 'finished_at':'2026-10-01T00:00:00Z',
+            'metadata':{'families':{'FAMILY_MART':1000,'LAWSON':574,'SEVEN_ELEVEN':500},
+                        'coverage_policy_version':'default'},
+        } for index,name in enumerate(PREFECTURES)]
+        incomplete=GuardedNationwideSource(regional_rows,{'FAMILY_MART':44000,'LAWSON':14224,'SEVEN_ELEVEN':23500})
+        with self.assertRaisesRegex(RuntimeError,'FAMILY_MART nationwide coverage fell'):
+            apply_snapshot(state,incomplete,'national-drop','2026-10-08T00:00:00Z',prefecture=prefecture)
+        self.assertEqual(len(state['runs']),len(PREFECTURES))
 
     def test_missing_seven_is_not_used_as_nearest(self):
         near=RawStore('セブン-イレブン 近い店','神奈川県横浜市中区1',35.4,139.4)

@@ -72,6 +72,11 @@ class OpenPoiSource(StoreSource):
             if brand_family not in self.cache:
                 self.cache[brand_family] = self._load_family(brand_family)
 
+    def coverage_counts(self) -> dict[str, int]:
+        self.prime()
+        return {family: sum(store.prefecture in PREFECTURES for store in self.cache[family])
+                for family in KEYWORDS}
+
     def _search(self, keyword: str, bbox: tuple[float, float, float, float]) -> list[dict]:
         query = urlencode({"q": keyword, "bbox": ",".join(map(str, bbox)), "limit": self.limit})
         for attempt in range(4):

@@ -27,6 +27,40 @@ def within_distance(distance: float | None, threshold: float) -> bool:
     return distance is not None and distance <= threshold
 
 
+def _validated_national_coverage_families(state: dict, source, source_name: str, coverage_policy_version: str, managed_presence_families: set[str]) -> set[str]:
+    coverage_counts = getattr(source, "coverage_counts", None)
+    if not callable(coverage_counts):
+        return set()
+    latest_by_prefecture: dict[str, dict] = {}
+    for run in state["runs"]:
+        if run["source"] != source_name or run["status"] != "succeeded":
+            continue
+        current = latest_by_prefecture.get(run["prefecture"])
+        if current is None or str(run.get("finished_at", "")) > str(current.get("finished_at", "")):
+            latest_by_prefecture[run["prefecture"]] = run
+    if len(latest_by_prefecture) != len(PREFECTURES):
+        return set()
+    baseline_key = tuple(sorted((prefecture, str(run.get("snapshot_key", ""))) for prefecture, run in latest_by_prefecture.items()))
+    cache = getattr(source, "_coverage_validation_cache", None)
+    if cache and cache[0] == baseline_key:
+        return set(cache[1])
+    previous_policy_version = {str(run.get("metadata", {}).get("coverage_policy_version", "default")) for run in latest_by_prefecture.values()}
+    policy_changed = len(previous_policy_version) != 1 or next(iter(previous_policy_version)) != coverage_policy_version
+    previous_totals = {family: sum(int(run.get("metadata", {}).get("families", {}).get(family, 0)) for run in latest_by_prefecture.values()) for family in FAMILIES}
+    current_totals = coverage_counts()
+    validated: set[str] = set()
+    for family, count in current_totals.items():
+        previous = previous_totals.get(family, 0)
+        changed_scope = family in managed_presence_families and policy_changed
+        if changed_scope:
+            continue
+        if previous and count < previous - max(1, ceil(previous * 0.05)):
+            raise RuntimeError(f"{family} nationwide coverage fell from {previous} to {count}; refusing incomplete snapshot")
+        validated.add(family)
+    setattr(source, "_coverage_validation_cache", (baseline_key, frozenset(validated)))
+    return validated
+
+
 def apply_snapshot(state: dict, source, snapshot_key: str, observed_at: str, missing_threshold: int = 2, prefecture: str = "神奈川県") -> dict:
     if missing_threshold not in (1, 2):
         raise ValueError("MISSING_THRESHOLD must be 1 or 2")
@@ -46,6 +80,7 @@ def apply_snapshot(state: dict, source, snapshot_key: str, observed_at: str, mis
     managed_presence_families = set(getattr(source, "managed_presence_families", set()))
     coverage_policy_version = str(getattr(source, "coverage_policy_version", "default"))
     source_name = source.__class__.__name__.replace("Source", "").lower()
+    globally_validated_families = _validated_national_coverage_families(state, source, source_name, coverage_policy_version, managed_presence_families) if getattr(source, "guard_coverage", False) else set()
     prior_run = next((r for r in reversed(state["runs"]) if r["source"] == source_name and r["prefecture"] == prefecture and r["status"] == "succeeded"), None)
     if prior_run and getattr(source, "guard_coverage", False):
         previous = prior_run.get("metadata", {}).get("families", {})
@@ -53,6 +88,10 @@ def apply_snapshot(state: dict, source, snapshot_key: str, observed_at: str, mis
         for family, count in family_counts.items():
             previous_count = previous.get(family, 0)
             policy_changed_for_family = family in managed_presence_families and previous_policy_version != coverage_policy_version
+            if family in globally_validated_families:
+                if previous_count and count < previous_count - max(1, ceil(previous_count * 0.20)):
+                    raise RuntimeError(f"{family} coverage in {prefecture} fell sharply from {previous_count} to {count}; refusing incomplete snapshot")
+                continue
             if not policy_changed_for_family and previous_count and count < previous_count - max(1, ceil(previous_count * 0.05)):
                 raise RuntimeError(f"{family} coverage fell from {previous[family]} to {count}; refusing incomplete snapshot")
     # Fetch completes before mutation; a failed source never creates a partial run.
