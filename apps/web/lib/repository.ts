@@ -19,15 +19,12 @@ async function fixtureState(): Promise<State> {
     return JSON.parse(await readFile(path.resolve(process.cwd(), 'fixtures/demo_state.json'), 'utf8')) as State;
   }
 }
-async function sourceState():Promise<State> {
+async function sourceState(includeChanges=false):Promise<State> {
   if(!sheetMode)return fixtureState();
-  const sheet=await getSheetsState();
+  const sheet=await getSheetsState({includeChanges});
   const observations:Record<string,unknown>[]=[];
   for(const store of sheet.stores){
     observations.push({id:store.last_observation_id||`latest:${store.id}`,store_id:store.id,observed_name:store.canonical_name,observed_address:store.address,lat:store.lat,lng:store.lng,source:store.source,observed_at:store.last_observed_at||store.last_seen_at,attributions:[]});
-  }
-  for(const change of sheet.changes){
-    observations.push({id:change.id,store_id:change.store_id,observed_name:change.observed_name,observed_address:change.observed_address,lat:change.lat,lng:change.lng,source:change.source,observed_at:change.observed_at,attributions:[]});
   }
   return {runs:sheet.runs as State['runs'],stores:sheet.stores as Store[],observations,events:sheet.events,evidence:sheet.evidence,changes:sheet.changes};
 }
@@ -101,7 +98,7 @@ function storeScope(filters:StoreFilters,values:unknown[]) {
 }
 export async function listCurrentStores(filters:StoreFilters):Promise<{items:Store[];total:number}> {
   if(!filters.brands.length)return {items:[],total:0};
-  if(!pool){const all=fixtureStores(await sourceState(),filters);return {items:all.slice(filters.page*100,(filters.page+1)*100),total:all.length};}
+  if(!pool){const all=fixtureStores(await sourceState(historical(filters)),filters);return {items:all.slice(filters.page*100,(filters.page+1)*100),total:all.length};}
   const values:unknown[]=[filters.brands];
   const scope=storeScope(filters,values);
   const where=scope.predicates.join(' and ');
@@ -111,7 +108,7 @@ export async function listCurrentStores(filters:StoreFilters):Promise<{items:Sto
   return {items:rows.rows,total:count.rows[0].total};
 }
 export async function getStore(id:string,filters:StoreFilters):Promise<Store|null> {
-  if(!pool)return fixtureStores(await sourceState(),filters).find(store=>store.id===id)??null;
+  if(!pool)return fixtureStores(await sourceState(historical(filters)),filters).find(store=>store.id===id)??null;
   const values:unknown[]=[filters.brands];
   const scope=storeScope(filters,values);
   values.push(id);
@@ -122,7 +119,7 @@ export async function listStoreMapPoints(filters:StoreFilters,bbox:[number,numbe
   if(!filters.brands.length)return {points:[],truncated:false};
   const step=Math.max(0.00005,360/2**zoom*80/512);
   if(!pool){
-    const stores=fixtureStores(await sourceState(),filters)
+    const stores=fixtureStores(await sourceState(historical(filters)),filters)
       .filter(store=>store.lng>=bbox[0]&&store.lat>=bbox[1]&&store.lng<=bbox[2]&&store.lat<=bbox[3]);
     const grouped=new Map<string,Store[]>();
     for(const store of stores){const key=`${Math.floor(store.lng/step)}:${Math.floor(store.lat/step)}`;grouped.set(key,[...(grouped.get(key)??[]),store]);}
@@ -197,7 +194,7 @@ export async function getClosure(id:string):Promise<Closure|null> {
   return {...rows.rows[0],distance_m:parseNumber(rows.rows[0].distance_m),evidence:evidence.rows};
 }
 export async function getHistory(id:string) {
-  if (!pool) {const state=await sourceState();if(state.changes)return state.changes.filter(change=>change.store_id===id).sort((a,b)=>String(b.observed_at).localeCompare(String(a.observed_at)));return state.observations.filter(o=>o.store_id===id).sort((a,b)=>String(b.observed_at).localeCompare(String(a.observed_at))).map(({raw_payload,licenses,...rest})=>rest);}
+  if (!pool) {const state=await sourceState(true);if(state.changes)return state.changes.filter(change=>change.store_id===id).sort((a,b)=>String(b.observed_at).localeCompare(String(a.observed_at)));return state.observations.filter(o=>o.store_id===id).sort((a,b)=>String(b.observed_at).localeCompare(String(a.observed_at))).map(({raw_payload,licenses,...rest})=>rest);}
   const rows=await pool.query('select id,snapshot_run_id,source,source_store_id,observed_name,observed_address,lat,lng,source_category,source_business_type,attributions,observed_at from store_observations where store_id=$1 order by observed_at desc limit 100',[id]);
   return rows.rows;
 }

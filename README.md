@@ -41,42 +41,15 @@ npm run dev
 
 `http://localhost:3000` を開きます。DBなしでは架空の神奈川県の店舗が1件表示されます。デモ表示は画面上にも明示します。
 
-## 実データ運用
+## 本番データ運用
 
-PostGIS 対応 PostgreSQL を準備し、サーバー専用 `DATABASE_URL` を設定します。DBパスワードを `NEXT_PUBLIC_` 付き変数やGit管理ファイルに置かないでください。
+公開Webと週次収集は Google Sheets を共有台帳として使用します。Render は `DATA_MODE=sheets` で読み取り、GitHub Actions は `STORAGE_MODE=sheets` で同じシートを更新します。2026年10月6日の全国取得では47都道府県・68,654店を記録しました。内訳はファミリーマート18,256店、ローソン26,942店、セブン‐イレブン23,456店です。移行時の23,795店・94件に、この全国取得47件を加え、取得履歴は141件になりました。
 
-```bash
-python3 -m pip install -r requirements.txt
-python3 -m collector migrate
-python3 -m collector snapshot --source openpoi --prefecture 全国 --snapshot-key openpoi-2026-W40
-```
+店舗台帳のほか、`Changes`（初回登録・変更・消失/再登場のみ）、`ClosureEvents`（閉店シグナル）、`Evidence`（根拠）、`SnapshotRuns`（都道府県別取得履歴）を保存します。Webアプリは読み取りスコープ、GitHub Actionsは更新スコープで同じ専用サービスアカウントを使います。スプレッドシートはサービスアカウントにのみ共有し、「リンクを知っている全員」には公開しません。
 
-`--snapshot-key` は冪等性キーです。同じキーの再実行は既存 snapshot を返します。都道府県名を指定するとその県だけ取り込みますが、OpenPOI の検索は日本全国のデータを一度取得してキャッシュし、その県を抽出します。毎週の完全比較には `全国` を指定してください。CSV と fixture の既定県は神奈川県です。
+全国取得は毎週月曜12:00（日本時間）に実行します。手動実行も GitHub の Actions から行えます。スプレッドシートが本番データの保存先なので、旧 Render Free Postgres が2026年11月3日に期限を迎えても、Sheets 接続設定が有効であればアプリのデータは影響を受けません。PostgreSQL は切替前のコピーで、以後の取得では更新されません。
 
-OpenPOI の取得結果は、成功したブランドごとに `data/openpoi-cache/` へ同じ snapshot key で一時保存します。DB保存に失敗して再実行する場合、取得済みブランドは再ダウンロードしません。キャッシュは Git 管理対象外で、保存済み snapshot があれば DB 側の冪等性チェックを優先します。元データを取り直すときは `OPENPOI_REFRESH_CACHE=1` を指定します。ネットワーク取得中は DB の書き込みロックを保持しません。
-
-公開Webは `DATA_MODE=sheets`、`NEXT_PUBLIC_DATA_MODE=sheets` でGoogle Sheetsを参照し、GitHub Actionsの週次収集も `STORAGE_MODE=sheets` で同じ台帳を更新します。初回移行では既存の23,795店舗と94件の都道府県別取得履歴を移しました。同じ専用サービスアカウントを使い、Webアプリは読み取りスコープ、GitHub Actionsは更新スコープで接続します。スプレッドシートはサービスアカウントにのみ共有し、「リンクを知っている全員」には公開しません。
-
-Sheetsの各タブは `Stores`（店舗台帳）、`Changes`（変化のみ）、`ClosureEvents`（閉店シグナル）、`Evidence`（根拠）、`SnapshotRuns`（取得履歴）です。PostgreSQLは切替後に自動更新されません。現行DBは予備コピーとして残りますが、Render Free Postgresは2026年11月3日に期限を迎えるため、必要な期間に応じて別の保管先へバックアップしてください。
-
-**Render Free Postgres は2026年11月3日に期限を迎え、バックアップもありません。継続運用には期限前に永続DBへ移行してください。** 無料枠では長期保存を保証できません。移行時は `pg_dump` / `pg_restore` で履歴ごと移し、RenderとGitHubの接続先を更新します。
-
-### 暗号化バックアップと復元
-
-全国 snapshot が成功した後、GitHub Actions は PostgreSQL 18 の `pg_dump` でDB全体を保存し、AES-256-GCMで暗号化して Actions 成果物に90日間保持します。暗号鍵はリポジトリ Secret `BACKUP_ENCRYPTION_KEY` と運用者のローカルファイル `~/.config/competitor-closure-map/backup.key` にあります。鍵は公開リポジトリへcommitしないでください。**成果物の保存期限はDBの保存期限を延長しません。**
-
-復元する際は対象実行の成果物 `database-backup-<run-id>` をダウンロードし、空の PostgreSQL 18 + PostGIS 対応DBへ取り込みます。取り込み前に接続先が空の移行先DBであることを確認してください。
-
-```bash
-gh run download <run-id> -R osamu-sej/competitor-closure-map -n database-backup-<run-id> -D backup
-python3 -m pip install 'cryptography>=45,<47'
-export BACKUP_ENCRYPTION_KEY="$(cat ~/.config/competitor-closure-map/backup.key)"
-python3 scripts/backup_crypto.py decrypt backup/database.dump.enc backup/database.dump
-pg_restore --list backup/database.dump
-pg_restore --no-owner --no-acl --exit-on-error --dbname="$NEW_DATABASE_URL" backup/database.dump
-```
-
-復元後は平文の `backup/database.dump` を削除し、公開WebとGitHub Actionsの `DATABASE_URL` を移行先へ切り替えます。鍵のローカルファイルを失うと、GitHub Secretから値を読み戻せないため、暗号化成果物は復号できなくなります。
+記録した件数は OpenPOI が返した店舗候補で、チェーン各社が公表する営業中店舗数を保証する数字ではありません。POIデータには誤分類・欠落・重複の可能性があり、閉店・消失も公式な閉店確定を意味しません。0件は閉店がなかった証拠ではありません。
 
 ## 閉店確認とAPI
 

@@ -11,22 +11,24 @@ type SheetState = {
   runs: Array<Record<string, unknown>>;
 };
 
-let cache: { expiresAt: number; value: SheetState } | undefined;
-let inflight: Promise<SheetState> | undefined;
+const cache = new Map<boolean, { expiresAt: number; value: SheetState }>();
+const inflight = new Map<boolean, Promise<SheetState>>();
 const spreadsheetId = () => process.env.SHEETS_SPREADSHEET_ID;
 const value = (row: Row, index: number, fallback: unknown = ''): unknown => row[index] === undefined || row[index] === '' ? fallback : row[index];
 const number = (input: unknown, fallback = 0) => Number.isFinite(Number(input)) ? Number(input) : fallback;
 const bool = (input: unknown) => input === true || String(input).toLowerCase() === 'true';
 const records = (rows: Row[], project: (row: Row) => Record<string, unknown>) => rows.map(project).filter(row => row.id || row.store_id || row.snapshot_key);
 
-async function load(): Promise<SheetState> {
+async function load(includeChanges: boolean): Promise<SheetState> {
   const id = spreadsheetId();
   if (!id) throw new Error('SHEETS_SPREADSHEET_ID is not configured');
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!raw) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is not configured');
   const auth = new GoogleAuth({ credentials: JSON.parse(raw), scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'] });
   const client = await auth.getClient();
-  const ranges = ["'Stores'!A2:R", "'Changes'!A2:N", "'ClosureEvents'!A2:O", "'Evidence'!A2:I", "'SnapshotRuns'!A2:I"];
+  const ranges = includeChanges
+    ? ["'Stores'!A2:R", "'Changes'!A2:N", "'ClosureEvents'!A2:O", "'Evidence'!A2:I", "'SnapshotRuns'!A2:I"]
+    : ["'Stores'!A2:R", "'ClosureEvents'!A2:O", "'Evidence'!A2:I", "'SnapshotRuns'!A2:I"];
   const query = new URLSearchParams();
   for (const range of ranges) query.append('ranges', range);
   const response = await client.request<{ valueRanges?: Array<{ values?: Row[] }> }>({
@@ -34,7 +36,9 @@ async function load(): Promise<SheetState> {
     method: 'GET',
   });
   const blocks = response.data.valueRanges ?? [];
-  const [storeRows = [], changeRows = [], eventRows = [], evidenceRows = [], runRows = []] = blocks.map(block => block.values ?? []);
+  const [storeRows = [], changeRows = [], eventRows = [], evidenceRows = [], runRows = []] = includeChanges
+    ? blocks.map(block => block.values ?? [])
+    : [blocks[0]?.values ?? [], [], blocks[1]?.values ?? [], blocks[2]?.values ?? [], blocks[3]?.values ?? []];
   return {
     stores: records(storeRows, row => ({
       id: String(value(row, 0)), brand_family: String(value(row, 1)), canonical_name: String(value(row, 2)), address: String(value(row, 3)),
@@ -68,8 +72,17 @@ async function load(): Promise<SheetState> {
   };
 }
 
-export async function getSheetsState(): Promise<SheetState> {
-  if (cache && cache.expiresAt > Date.now()) return cache.value;
-  if (!inflight) inflight = load().then(value => { cache = { value, expiresAt: Date.now() + 30_000 }; return value; }).finally(() => { inflight = undefined; });
-  return inflight;
+export async function getSheetsState(options: { includeChanges?: boolean } = {}): Promise<SheetState> {
+  const includeChanges = options.includeChanges ?? false;
+  const cached = cache.get(includeChanges);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  let request = inflight.get(includeChanges);
+  if (!request) {
+    request = load(includeChanges).then(value => {
+      cache.set(includeChanges, { value, expiresAt: Date.now() + 30_000 });
+      return value;
+    }).finally(() => { inflight.delete(includeChanges); });
+    inflight.set(includeChanges, request);
+  }
+  return request;
 }

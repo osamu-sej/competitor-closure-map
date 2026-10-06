@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import time
 import urllib.parse
 import urllib.request
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
+from urllib.error import HTTPError, URLError
 from uuid import uuid4
 
 from .engine import new_state
@@ -16,6 +19,10 @@ from .normalization import normalize_address, normalize_name
 SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 _token: tuple[str, float] | None = None
+_last_write_at = 0.0
+_MIN_WRITE_INTERVAL_SECONDS = 1.1
+_MAX_REQUEST_ATTEMPTS = 7
+_WRITE_CHUNK_ROWS = 5000
 HEADERS = {
     "Stores": ["store_id", "brand_family", "store_name", "address", "prefecture", "municipality", "latitude", "longitude", "presence", "missing_count", "first_seen_at", "last_seen_at", "last_snapshot_key", "source", "source_store_id", "updated_at", "last_observation_id", "last_observed_at"],
     "Changes": ["change_id", "store_id", "observed_at", "change_type", "brand_family", "store_name", "address", "prefecture", "municipality", "latitude", "longitude", "source", "source_store_id", "snapshot_key"],
@@ -46,6 +53,7 @@ def _auth_headers() -> dict[str, str]:
 
 
 def _request(path: str, *, method: str = "GET", body: dict | None = None) -> dict:
+    global _last_write_at
     sheet_id = os.getenv("SHEETS_SPREADSHEET_ID", "")
     if not sheet_id:
         raise RuntimeError("SHEETS_SPREADSHEET_ID is required for Sheets storage")
@@ -55,12 +63,30 @@ def _request(path: str, *, method: str = "GET", body: dict | None = None) -> dic
         data=json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None,
         headers=_auth_headers(), method=method,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=90) as response:
-            raw = response.read()
-    except Exception as error:
-        raise RuntimeError(f"Google Sheets API request failed: {error}") from error
-    return json.loads(raw) if raw else {}
+    is_write = method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    for attempt in range(_MAX_REQUEST_ATTEMPTS):
+        if is_write:
+            delay = _MIN_WRITE_INTERVAL_SECONDS - (time.monotonic() - _last_write_at)
+            if delay > 0:
+                time.sleep(delay)
+            _last_write_at = time.monotonic()
+        try:
+            with urllib.request.urlopen(request, timeout=90) as response:
+                raw = response.read()
+            return json.loads(raw) if raw else {}
+        except HTTPError as error:
+            if error.code not in {429, 500, 502, 503, 504} or attempt == _MAX_REQUEST_ATTEMPTS - 1:
+                raise RuntimeError(f"Google Sheets API request failed: {error}") from error
+            retry_after = error.headers.get("Retry-After") if error.headers else None
+            try:
+                wait = max(0.0, float(retry_after)) if retry_after else min(60.0, 2 ** attempt)
+            except ValueError:
+                wait = min(60.0, 2 ** attempt)
+            time.sleep(wait + random.uniform(0.05, 0.25))
+        except (URLError, TimeoutError) as error:
+            if attempt == _MAX_REQUEST_ATTEMPTS - 1:
+                raise RuntimeError(f"Google Sheets API request failed: {error}") from error
+            time.sleep(min(60.0, 2 ** attempt) + random.uniform(0.05, 0.25))
 
 
 def _read_ranges() -> dict[str, list[list[Any]]]:
@@ -224,17 +250,17 @@ def save_state(state: dict) -> None:
     change_count = len(state.get("changes", [])) if state.get("_replace_changes") else int(existing.get("Changes", 0)) + len(appended)
     _ensure_capacity({"Stores": len(store_rows) + 1, "Changes": change_count + 1, "ClosureEvents": len(state["events"]) + 1, "Evidence": len(state["evidence"]) + 1, "SnapshotRuns": len(state["runs"]) + 1})
     # Fixed-size slices keep every request small and make a retry idempotently rewrite the same rows.
-    for offset in range(0, len(store_rows), 1500):
-        _values_update("Stores", offset + 2, store_rows[offset:offset + 1500])
+    for offset in range(0, len(store_rows), _WRITE_CHUNK_ROWS):
+        _values_update("Stores", offset + 2, store_rows[offset:offset + _WRITE_CHUNK_ROWS])
     change_rows = _rows("Changes", state.get("changes", []))
     if state.get("_replace_changes"):
         change_rows = _rows("Changes", state.get("changes", []))
-        for offset in range(0, len(change_rows), 1500):
-            _values_update("Changes", offset + 2, change_rows[offset:offset + 1500])
+        for offset in range(0, len(change_rows), _WRITE_CHUNK_ROWS):
+            _values_update("Changes", offset + 2, change_rows[offset:offset + _WRITE_CHUNK_ROWS])
     elif appended:
         first = int(state.get("_sheet_row_counts", {}).get("Changes", 0)) + 2
-        for offset in range(0, len(appended), 1500):
-            _values_update("Changes", first + offset, _rows("Changes", appended[offset:offset + 1500]))
+        for offset in range(0, len(appended), _WRITE_CHUNK_ROWS):
+            _values_update("Changes", first + offset, _rows("Changes", appended[offset:offset + _WRITE_CHUNK_ROWS]))
     store_names = {str(store["id"]): store["canonical_name"] for store in state["stores"]}
     events = state["events"]
     for event in events:
@@ -242,15 +268,15 @@ def save_state(state: dict) -> None:
         if nearest_id:
             event["nearest_seven_name"] = store_names.get(str(nearest_id), event.get("nearest_seven_name"))
     event_rows = _rows("ClosureEvents", events)
-    for offset in range(0, len(event_rows), 1500):
-        _values_update("ClosureEvents", offset + 2, event_rows[offset:offset + 1500])
+    for offset in range(0, len(event_rows), _WRITE_CHUNK_ROWS):
+        _values_update("ClosureEvents", offset + 2, event_rows[offset:offset + _WRITE_CHUNK_ROWS])
     evidence_rows = _rows("Evidence", state["evidence"])
-    for offset in range(0, len(evidence_rows), 1500):
-        _values_update("Evidence", offset + 2, evidence_rows[offset:offset + 1500])
+    for offset in range(0, len(evidence_rows), _WRITE_CHUNK_ROWS):
+        _values_update("Evidence", offset + 2, evidence_rows[offset:offset + _WRITE_CHUNK_ROWS])
     runs = state["runs"]
     run_rows = [[run.get("snapshot_key", run["id"]), run.get("source", ""), run.get("prefecture", ""), run.get("started_at", ""), run.get("finished_at", ""), run.get("status", ""), run.get("store_count", 0), _cell(run.get("metadata", {})), _cell(run.get("error_message"))] for run in runs]
-    for offset in range(0, len(run_rows), 1500):
-        _values_update("SnapshotRuns", offset + 2, run_rows[offset:offset + 1500])
+    for offset in range(0, len(run_rows), _WRITE_CHUNK_ROWS):
+        _values_update("SnapshotRuns", offset + 2, run_rows[offset:offset + _WRITE_CHUNK_ROWS])
 
 
 def record_failure(snapshot_key: str, source: str, prefecture: str, error_message: str) -> None:
