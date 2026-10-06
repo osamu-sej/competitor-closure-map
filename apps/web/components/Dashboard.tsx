@@ -14,10 +14,11 @@ const statusDescriptions:Record<string,string>={
   CLOSED_SUSPECTED:'連続して店舗データに見つからないなど、閉店の可能性はありますが、確認できる根拠が不足しています。',
   MISSING:'前回は店舗データに存在し、最新の取得では見つからない店舗。移転・一時休業・データ欠落の可能性もあり、閉店とは判定しません。'
 };
+const liveDataMode=process.env.NEXT_PUBLIC_DATA_MODE==='database'||process.env.NEXT_PUBLIC_DATA_MODE==='sheets';
 const date=(value?:string|null)=>value?new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value)):'未確認';
 const day=(value?:string|null)=>value?new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value)):'';
 export default function Dashboard(){
-  const [storeMode,setStoreMode]=useState(process.env.NEXT_PUBLIC_DATA_MODE==='database');
+  const [storeMode,setStoreMode]=useState(liveDataMode);
   const [status,setStatus]=useState('CLOSED_CONFIRMED');const [selectedBrands,setSelectedBrands]=useState(['FAMILY_MART','LAWSON']);const [distance,setDistance]=useState(100);
   const [prefecture,setPrefecture]=useState('');const [municipality,setMunicipality]=useState('');const [from,setFrom]=useState('');const [to,setTo]=useState('');
   const [health,setHealth]=useState<{first_snapshot:string|null;latest_snapshot:string|null;snapshot_day_count:number;snapshot_count:number;prefecture_count:number;store_count:number;brands:Record<string,number>;scope_prefecture:string;extent:{west:number;south:number;east:number;north:number}|null}|null>(null);
@@ -32,7 +33,7 @@ export default function Dashboard(){
   const select=useCallback((id:string)=>setSelectedId(id),[]);
   const toggleBrand=(family:string)=>{setSelectedBrands(current=>current.includes(family)?current.filter(value=>value!==family):[...current,family]);setPage(0);};
   const change=(fn:(value:string)=>void)=>(event:React.ChangeEvent<HTMLSelectElement|HTMLInputElement>)=>{fn(event.target.value);setPage(0);};
-  const demoMode=process.env.NEXT_PUBLIC_DATA_MODE!=='database';
+  const demoMode=!liveDataMode;
   const firstDay=health?.scope_prefecture===prefecture?day(health.first_snapshot):'';
   const beforeCollection=Boolean(firstDay&&from&&from<firstDay);
   const entirelyBeforeCollection=Boolean(firstDay&&to&&to<firstDay);
