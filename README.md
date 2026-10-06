@@ -44,7 +44,7 @@ npm run dev
 
 ## 本番データ運用
 
-公開Webと週次収集は Google Sheets を共有台帳として使用します。Render は `DATA_MODE=sheets` で読み取り、GitHub Actions は `STORAGE_MODE=sheets` で同じシートを更新します。10月7日のv0.4.5ではLAWSON系をOvertureのコンビニPOIに限定し、全国snapshotを47都道府県で完了しました。v0.4.7で3ブランドにカテゴリ条件を広げたところ、統合POIの代表ソース表示によってFamilyMart・Seven-Elevenを過少計上することが判明しました。v0.4.8では代表ソースだけでなく統合出典も確認する条件に改め、全国snapshotを再実行します。結果と各社公式値との差は[3社の件数調査](docs/brand-count-audit-2026-10-07.md)に記録します。旧候補は対象外として残し、過去の観測・根拠記録も監査できます。
+公開Webと週次収集は Google Sheets を共有台帳として使用します。Render は `DATA_MODE=sheets` で読み取り、GitHub Actions は `STORAGE_MODE=sheets` で同じシートを更新します。10月7日のv0.4.5ではLAWSON系をOvertureのコンビニPOIに限定し、全国snapshotを47都道府県で完了しました。v0.4.7で3ブランドにカテゴリ条件を広げたところ、統合POIの代表ソース表示によってFamilyMart・Seven-Elevenを過少計上することが判明しました。v0.4.8では代表ソースだけでなく統合出典も確認し、10月7日に47都道府県の全国snapshotを完了しました。FamilyMart・Seven-Elevenの候補数は増えましたが、公式値との差は残り、店舗母数が公式台帳に近いとは確認できていません。件数とデータ要件は[3社の件数調査](docs/brand-count-audit-2026-10-07.md)に記録します。旧候補は対象外として残し、過去の観測・根拠記録も監査できます。
 
 店舗台帳のほか、`Changes`（初回登録・変更・消失/再登場のみ）、`ClosureEvents`（閉店シグナル）、`Evidence`（根拠）、`SnapshotRuns`（都道府県別取得履歴）を保存します。Webアプリは読み取りスコープ、GitHub Actionsは更新スコープで同じ専用サービスアカウントを使います。スプレッドシートはサービスアカウントにのみ共有し、「リンクを知っている全員」には公開しません。
 
