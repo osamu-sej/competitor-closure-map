@@ -58,9 +58,9 @@ test('filters keep list and map aligned and detail uses last observation', async
 
 test('store map shows collected locations and a visible release version', async ({page})=>{
   await page.goto('/');
-  await expect(page.getByRole('link',{name:'v0.3.1'})).toBeVisible();
+  await expect(page.getByRole('link',{name:'v0.4.4'})).toBeVisible();
   const version=await page.request.get('/api/version');
-  expect((await version.json()).version).toBe('0.3.1');
+  expect((await version.json()).version).toBe('0.4.4');
   await page.getByRole('button',{name:'収録店舗マップ'}).click();
   await expect(page.getByRole('heading',{name:/収録店舗一覧/})).toContainText('2 件');
   await expect(page.locator('.store-result')).toHaveCount(2);
@@ -84,7 +84,7 @@ test('observation period searches historical stores in both list and map', async
   await expect(page.locator('.store-result')).toHaveCount(3);
   await expect(page.getByText('ローソン 相模原中央店')).toBeVisible();
   await expect(page.locator('.map-current-marker')).toHaveCount(1);
-  await page.getByRole('button',{name:/ローソン 期間内に観測 ローソン 相模原中央店/}).click();
+  await page.getByRole('button',{name:/ローソン（その他表記） 期間内に観測 ローソン 相模原中央店/}).click();
   await expect(page.getByRole('dialog',{name:'収録店舗詳細'})).toContainText('期間内の最終観測');
   await page.getByLabel('詳細を閉じる').click();
   await page.getByLabel('観測期間 開始').fill('2026-06-15');
