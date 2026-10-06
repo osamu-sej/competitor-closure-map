@@ -97,16 +97,69 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(rows[0].source_category,'convenience_store')
         self.assertEqual(rows[0].licenses,['Apache-2.0'])
 
-    def test_lawson_search_keeps_only_overture_convenience_store_pois(self):
+    def test_each_brand_filters_other_sources_before_deduplication(self):
+        samples={
+            'FAMILY_MART':'ファミリーマート 横浜店',
+            'LAWSON':'ローソン 横浜店',
+            'SEVEN_ELEVEN':'セブン-イレブン 横浜店',
+        }
+        self.assertEqual(OpenPoiSource.managed_presence_families,set(KEYWORDS))
+        for family,name in samples.items():
+            first={'name':name,'address':'','lat':35.4,'lng':139.4,'prefecture':'神奈川県','source':'overture','category':'convenience_store','licenses':['Apache-2.0']}
+            second={**first,'address':'神奈川県横浜市中区1','source':'jff','category':'restaurant','licenses':['CC-BY-4.0']}
+            source=OpenPoiSource()
+            with self.subTest(family=family),patch.dict(KEYWORDS,{family:['first query','second query']}),patch.object(source,'_partition',side_effect=[[first],[second]]):
+                rows=source._fetch_family(family)
+            self.assertEqual(len(rows),1)
+            self.assertEqual(rows[0].source,'overture')
+            self.assertEqual(rows[0].source_category,'convenience_store')
+            self.assertEqual(rows[0].licenses,['Apache-2.0'])
+
+    def test_all_brands_keep_only_overture_convenience_store_pois(self):
         source=OpenPoiSource()
+        samples={
+            'FAMILY_MART':('ファミリーマート 横浜店','ファミリーマートATM'),
+            'LAWSON':('ローソン 横浜店','ローソン銀行'),
+            'SEVEN_ELEVEN':('セブン-イレブン 横浜店','セブン銀行ATM'),
+        }
+        for family,(store_name,service_name) in samples.items():
+            actual=RawStore(store_name,'神奈川県横浜市中区1',35.4,139.4,source='overture',source_category='convenience_store')
+            rows=[actual,
+                  RawStore(service_name,'神奈川県横浜市中区2',35.4,139.401,source='overture',source_category='service_other'),
+                  RawStore(store_name,'神奈川県横浜市中区1',35.4,139.4,source='jff',source_category='restaurant')]
+            with self.subTest(family=family),patch.object(source,'_fetch_family',return_value=rows):
+                self.assertEqual(source.fetch_stores('神奈川県',family),[actual])
+
+    def test_new_policy_suppresses_legacy_candidates_for_all_brands(self):
         rows=[
-            RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='overture',source_category='convenience_store'),
-            RawStore('ローソン銀行','神奈川県横浜市中区2',35.4,139.401,source='overture',source_category='service_other'),
-            RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='jff',source_category='restaurant'),
+            RawStore('ファミリーマート 横浜店','神奈川県横浜市中区1',35.4,139.4,source='overture',source_category='convenience_store'),
+            RawStore('ファミリーマート ATM','神奈川県横浜市中区2',35.4,139.401,source='openpoi',source_category='service_other'),
+            RawStore('ローソン 横浜店','神奈川県横浜市中区3',35.4,139.402,source='overture',source_category='convenience_store'),
+            RawStore('ローソン ATM','神奈川県横浜市中区4',35.4,139.403,source='openpoi',source_category='service_other'),
+            RawStore('セブン-イレブン 横浜店','神奈川県横浜市中区5',35.4,139.404,source='overture',source_category='convenience_store'),
+            RawStore('セブン-イレブン ATM','神奈川県横浜市中区6',35.4,139.405,source='openpoi',source_category='service_other'),
         ]
-        with patch.object(source,'_fetch_family',return_value=rows):
-            found=source.fetch_stores('神奈川県','LAWSON')
-        self.assertEqual(found,[rows[0]])
+        state=new_state()
+        apply_snapshot(state,InlineSource(rows),'legacy-first','2026-10-01T00:00:00Z')
+        apply_snapshot(state,InlineSource([rows[0],rows[2]]),'legacy-second','2026-10-02T00:00:00Z')
+
+        source=InlineSource([rows[0],rows[2]])
+        source.managed_presence_families=set(KEYWORDS)
+        source.coverage_policy_version='overture-convenience-store-v2'
+        run=apply_snapshot(state,source,'curated','2026-10-03T00:00:00Z')
+
+        suppressed={store['canonical_name']:store for store in state['stores'] if store['current_presence']=='SUPPRESSED'}
+        self.assertEqual(set(suppressed),{'ファミリーマート ATM','ローソン ATM','セブン-イレブン ATM'})
+        self.assertTrue(all(store['missing_count']==0 for store in suppressed.values()))
+        self.assertEqual(run['metadata']['out_of_scope'],3)
+        self.assertEqual(run['metadata']['missing'],0)
+        self.assertEqual(run['metadata']['closure_candidates'],0)
+        out_of_scope_events=[event for event in state['events'] if event['status']=='OUT_OF_SCOPE']
+        self.assertEqual(len(out_of_scope_events),2)
+        self.assertEqual({event['reason'] for event in out_of_scope_events},{'対象ブランドの候補を実店舗POIに限定'})
+        seven=next(store for store in state['stores'] if store['canonical_name']=='セブン-イレブン 横浜店')
+        self.assertEqual(seven['current_presence'],'MISSING')
+        self.assertEqual(len([event for event in state['events'] if event['store_id']==seven['id']]),0)
 
     def test_lawson_policy_suppresses_legacy_candidates_without_false_closures(self):
         active=RawStore('ローソン 横浜店','神奈川県横浜市中区1',35.4,139.4,source='overture',source_category='convenience_store')

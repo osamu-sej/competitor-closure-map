@@ -15,6 +15,11 @@ const statusDescriptions:Record<string,string>={
   CLOSED_SUSPECTED:'連続して店舗データに見つからないなど、閉店の可能性はありますが、確認できる根拠が不足しています。',
   MISSING:'前回は店舗データに存在し、最新の取得では見つからない店舗。移転・一時休業・データ欠落の可能性もあり、閉店とは判定しません。'
 };
+const benchmarkBrands=[
+  {family:'FAMILY_MART',label:'ファミリーマート'},
+  {family:'LAWSON',label:'ローソン系'},
+  {family:'SEVEN_ELEVEN',label:'セブン-イレブン'},
+] as const;
 const liveDataMode=process.env.NEXT_PUBLIC_DATA_MODE==='database'||process.env.NEXT_PUBLIC_DATA_MODE==='sheets';
 const date=(value?:string|null)=>value?new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value)):'未確認';
 const day=(value?:string|null)=>value?new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value)):'';
@@ -22,7 +27,7 @@ export default function Dashboard(){
   const [storeMode,setStoreMode]=useState(liveDataMode);
   const [status,setStatus]=useState('CLOSED_CONFIRMED');const [selectedBrands,setSelectedBrands]=useState(['FAMILY_MART','LAWSON']);const [distance,setDistance]=useState(100);
   const [prefecture,setPrefecture]=useState('');const [municipality,setMunicipality]=useState('');const [from,setFrom]=useState('');const [to,setTo]=useState('');
-  const [health,setHealth]=useState<{first_snapshot:string|null;latest_snapshot:string|null;snapshot_day_count:number;snapshot_count:number;prefecture_count:number;store_count:number;brands:Record<string,number>;lawson_variants?:Record<string,number>;lawson_official_count?:number;lawson_official_as_of?:string;lawson_official_source?:string;scope_prefecture:string;extent:{west:number;south:number;east:number;north:number}|null}|null>(null);
+  const [health,setHealth]=useState<{first_snapshot:string|null;latest_snapshot:string|null;snapshot_day_count:number;snapshot_count:number;prefecture_count:number;store_count:number;brands:Record<string,number>;official_brand_counts?:Record<string,number>;official_brand_as_of?:string;official_brand_sources?:Record<string,string>;lawson_variants?:Record<string,number>;lawson_official_count?:number;lawson_official_as_of?:string;lawson_official_source?:string;scope_prefecture:string;extent:{west:number;south:number;east:number;north:number}|null}|null>(null);
   const [items,setItems]=useState<Closure[]>([]);const [total,setTotal]=useState(0);const [page,setPage]=useState(0);
   const [selectedId,setSelectedId]=useState<string|null>(null);const [detail,setDetail]=useState<Closure|null>(null);
   const [loading,setLoading]=useState(true);const [error,setError]=useState('');
@@ -32,10 +37,12 @@ export default function Dashboard(){
   useEffect(()=>{if(!selectedId){setDetail(null);return;}const controller=new AbortController();fetch(`/api/closures/${selectedId}`,{signal:controller.signal}).then(r=>r.json()).then(setDetail).catch(()=>{});return()=>controller.abort();},[selectedId]);
   const selected=items.find(item=>item.id===selectedId)??null;
   const lawsonBreakdown=health?.lawson_variants?Object.entries(lawsonVariantLabels).map(([key,label])=>`${label} ${(health.lawson_variants?.[key]??0).toLocaleString()}`).join('・'):'';
-  const lawsonCandidates=health?.brands.LAWSON??0;
-  const lawsonOfficial=health?.lawson_official_count??0;
-  const lawsonDelta=lawsonCandidates-lawsonOfficial;
-  const lawsonDeltaPercent=lawsonOfficial?Math.abs(lawsonDelta)/lawsonOfficial*100:0;
+  const nationalBenchmarks=benchmarkBrands.map(({family,label})=>{
+    const candidate=health?.brands[family]??0;
+    const official=health?.official_brand_counts?.[family]??0;
+    const delta=candidate-official;
+    return {family,label,candidate,official,delta,deltaPercent:official?Math.abs(delta)/official*100:0,source:health?.official_brand_sources?.[family]??''};
+  });
   const select=useCallback((id:string)=>setSelectedId(id),[]);
   const toggleBrand=(family:string)=>{setSelectedBrands(current=>current.includes(family)?current.filter(value=>value!==family):[...current,family]);setPage(0);};
   const change=(fn:(value:string)=>void)=>(event:React.ChangeEvent<HTMLSelectElement|HTMLInputElement>)=>{fn(event.target.value);setPage(0);};
@@ -46,7 +53,16 @@ export default function Dashboard(){
   return <main className={'dashboard'+(demoMode?' demo-mode':' data-mode')}>
     <header className="topbar"><div className="brandmark"><div className="brand-icon">↗</div><div><h1>競合閉店MAP <a className="version-link" href="/api/version" title="バージョンとデプロイコミット">v{packageInfo.version}</a></h1><p>全国 / 店舗マスタ差分モニター</p></div></div><div className="top-note"><span className="live-dot"/> {demoMode?'実データ未接続':'実データ'} <span className="top-divider"/> 全国47都道府県</div></header>
     {demoMode&&<div className="demo-banner" role="status"><strong>実データは未収集です</strong><span>表示される店舗は架空の動作確認用データです。期間を指定しても、過去の実店舗の閉店状況は検索できません。</span></div>}
-    {!demoMode&&<div className="demo-banner data-banner" role="status"><strong>ローソン件数の公式値との照合</strong><span>{health?.scope_prefecture===prefecture&&health.latest_snapshot?prefecture?<>最終取得 {date(health.latest_snapshot)} / {prefecture} {health.store_count.toLocaleString()}件（LAWSON系候補 {lawsonCandidates.toLocaleString()}件）。全国の公式基準は {lawsonOfficial.toLocaleString()}店（{health.lawson_official_as_of} 時点）です。県別候補数と全国公式値は集計範囲が異なります。</>:<>最終取得 {date(health.latest_snapshot)} / 全国 {health.store_count.toLocaleString()}件（FamilyMart {health.brands.FAMILY_MART?.toLocaleString()}・LAWSON系候補 {lawsonCandidates.toLocaleString()}・セブン-イレブン {health.brands.SEVEN_ELEVEN?.toLocaleString()}）。ローソングループ公式 {lawsonOfficial.toLocaleString()}店（{health.lawson_official_as_of}）との差 {lawsonDelta>0?'+':''}{lawsonDelta.toLocaleString()}件（{lawsonDeltaPercent.toFixed(1)}%）。</>: '収録件数を読み込み中です。'}<br/>候補の店名内訳：{lawsonBreakdown||'分類中'}。公式値はローソン・ナチュラルローソン・ローソンストア100等を含むグループ総数です。候補数が近くても、個々の店舗や営業中であることを照合・保証した数字ではありません。<a href={health?.lawson_official_source??'https://www.lawson.co.jp/company/ir/financial/monthly/index.html'} target="_blank" rel="noreferrer">ローソン公式月次 ↗</a> ・ <a href="https://github.com/osamu-sej/competitor-closure-map/blob/main/docs/lawson-count-audit-2026-10-07.md" target="_blank" rel="noreferrer">件数の調査・判定条件 ↗</a> ・ 最寄りセブンは収録候補内の暫定値です。</span></div>}
+    {!demoMode&&<div className="demo-banner data-banner" role="status"><strong>3社の公式店舗数との比較</strong><span>
+      {health?.scope_prefecture===prefecture&&health.latest_snapshot?<>
+        <div>最終取得 {date(health.latest_snapshot)} / {prefecture||'全国'} {health.store_count.toLocaleString()}件。基準日は {health.official_brand_as_of??'未確認'} です。</div>
+        <div className="brand-benchmarks">{nationalBenchmarks.map(row=><div key={row.family}><b>{row.label}</b>　{prefecture?<>県内候補 {row.candidate.toLocaleString()}件（全国公式 {row.official.toLocaleString()}店）</>:<>候補 {row.candidate.toLocaleString()}件 / 公式 {row.official.toLocaleString()}店 / 差 {row.delta>0?'+':''}{row.delta.toLocaleString()}件（{row.deltaPercent.toFixed(1)}%）</>}　<a href={row.source||'#'} target="_blank" rel="noreferrer">公式 ↗</a></div>)}</div>
+        {prefecture&&<div>県別候補と全国公式値は集計範囲が異なるため、差分比較は全国表示で確認してください。</div>}
+      </>: '収録件数を読み込み中です。'}
+      <div>候補はOverture由来でカテゴリが <code>convenience_store</code> のPOIです。公式店舗名簿との1店ずつの照合や、営業中であることを保証した数字ではありません。</div>
+      <div>ローソン店名内訳：{lawsonBreakdown||'分類中'}（ローソングループ公式値にはナチュラルローソン・ローソンストア100等を含む）。最寄りセブンは収録候補内の暫定値です。</div>
+      <a href="https://github.com/osamu-sej/competitor-closure-map/blob/main/docs/brand-count-audit-2026-10-07.md" target="_blank" rel="noreferrer">3社の件数調査・判定条件 ↗</a>
+    </span></div>}
     <div className="view-switch" role="group" aria-label="表示切替"><button type="button" className={storeMode?'active':''} onClick={()=>setStoreMode(true)}>収録店舗マップ</button><button type="button" className={!storeMode?'active':''} onClick={()=>setStoreMode(false)}>閉店・消失シグナル</button></div>
     {storeMode?<StoreExplorer prefecture={prefecture} setPrefecture={setPrefecture} extent={health?.scope_prefecture===prefecture?health.extent:null}/>:<>
     <div className="filterbar">

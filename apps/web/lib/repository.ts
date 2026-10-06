@@ -10,7 +10,15 @@ import { changeFromRow, forEachSheetRow, getSmallSheetTab, storeFromRow, type Sh
 const dbMode = process.env.DATA_MODE === 'database';
 const sheetMode = process.env.DATA_MODE === 'sheets';
 const pool = dbMode ? new Pool({connectionString:process.env.DATABASE_URL, max:4}) : null;
-const lawsonOfficialBenchmark = {count:14630,as_of:'2026-08-31',source:'https://www.lawson.co.jp/company/ir/financial/monthly/index.html'};
+const officialBrandBenchmarks = {
+  FAMILY_MART:{count:16455,source:'https://www.family.co.jp/company/familymart/monthly_sales/flash.html'},
+  LAWSON:{count:14630,source:'https://www.lawson.co.jp/company/ir/financial/monthly/index.html'},
+  SEVEN_ELEVEN:{count:21957,source:'https://www.sej.co.jp/company/news_release/news/2026/202609161500.html'},
+} as const;
+const officialBrandAsOf='2026-08-31';
+const officialBrandCounts=Object.fromEntries(Object.entries(officialBrandBenchmarks).map(([family,benchmark])=>[family,benchmark.count]));
+const officialBrandSources=Object.fromEntries(Object.entries(officialBrandBenchmarks).map(([family,benchmark])=>[family,benchmark.source]));
+const lawsonOfficialBenchmark = {count:officialBrandBenchmarks.LAWSON.count,as_of:officialBrandAsOf,source:officialBrandBenchmarks.LAWSON.source};
 type State = {runs:Array<{status:string;finished_at:string;prefecture?:string}>;stores:Store[];observations:Array<Record<string,unknown>>;events:Array<Record<string,unknown>>;evidence:Array<Record<string,unknown>>;changes?:Array<Record<string,unknown>>};
 
 async function fixtureState(): Promise<State> {
@@ -354,7 +362,7 @@ async function sheetsHealth(prefecture:string):Promise<Record<string,unknown>> {
   const value={ok:true,mode:'sheets',db:'connected',first_snapshot:runs.length?runs.reduce((old,run)=>run.started_at&&run.started_at<old?run.started_at:old,runs[0].started_at):null,
     latest_snapshot:runs.length?runs.reduce((latest,run)=>run.finished_at>latest?run.finished_at:latest,runs[0].finished_at):null,
     snapshot_day_count:new Set(runs.map(run=>observationDay(run.finished_at))).size,snapshot_count:runs.length,
-    prefecture_count:new Set(runs.map(run=>run.prefecture).filter(Boolean)).size,store_count:storeCount,brands,lawson_variants:lawsonVariants,lawson_official_count:lawsonOfficialBenchmark.count,lawson_official_as_of:lawsonOfficialBenchmark.as_of,lawson_official_source:lawsonOfficialBenchmark.source,scope_prefecture:prefecture,extent};
+    prefecture_count:new Set(runs.map(run=>run.prefecture).filter(Boolean)).size,store_count:storeCount,brands,official_brand_counts:officialBrandCounts,official_brand_as_of:officialBrandAsOf,official_brand_sources:officialBrandSources,lawson_variants:lawsonVariants,lawson_official_count:lawsonOfficialBenchmark.count,lawson_official_as_of:lawsonOfficialBenchmark.as_of,lawson_official_source:lawsonOfficialBenchmark.source,scope_prefecture:prefecture,extent};
   sheetHealthCache.set(prefecture,{value,expiresAt:Date.now()+30000});
   return value;
 }
@@ -377,7 +385,7 @@ export async function health(prefecture='') {
     const lawsonVariants=emptyLawsonVariantCounts();
     for(const store of stores)if(store.brand_family==='LAWSON')addLawsonVariantCount(lawsonVariants,store.canonical_name);
     const isSheets=sheetMode;
-    return {ok:true,mode:isSheets?'sheets':'fixture',db:isSheets?'connected':'not configured',first_snapshot:runs[0]?.finished_at??null,latest_snapshot:runs.at(-1)?.finished_at??null,snapshot_day_count:new Set(runs.map(r=>observationDay(r.finished_at))).size,snapshot_count:runs.length,prefecture_count:isSheets?new Set(runs.map(r=>r.prefecture)).size:1,store_count:stores.length,brands,lawson_variants:lawsonVariants,lawson_official_count:lawsonOfficialBenchmark.count,lawson_official_as_of:lawsonOfficialBenchmark.as_of,lawson_official_source:lawsonOfficialBenchmark.source,scope_prefecture:prefecture,extent:stores.length?{west:Math.min(...stores.map(s=>s.lng)),south:Math.min(...stores.map(s=>s.lat)),east:Math.max(...stores.map(s=>s.lng)),north:Math.max(...stores.map(s=>s.lat))}:null};
+    return {ok:true,mode:isSheets?'sheets':'fixture',db:isSheets?'connected':'not configured',first_snapshot:runs[0]?.finished_at??null,latest_snapshot:runs.at(-1)?.finished_at??null,snapshot_day_count:new Set(runs.map(r=>observationDay(r.finished_at))).size,snapshot_count:runs.length,prefecture_count:isSheets?new Set(runs.map(r=>r.prefecture)).size:1,store_count:stores.length,brands,official_brand_counts:officialBrandCounts,official_brand_as_of:officialBrandAsOf,official_brand_sources:officialBrandSources,lawson_variants:lawsonVariants,lawson_official_count:lawsonOfficialBenchmark.count,lawson_official_as_of:lawsonOfficialBenchmark.as_of,lawson_official_source:lawsonOfficialBenchmark.source,scope_prefecture:prefecture,extent:stores.length?{west:Math.min(...stores.map(s=>s.lng)),south:Math.min(...stores.map(s=>s.lat)),east:Math.max(...stores.map(s=>s.lng)),north:Math.max(...stores.map(s=>s.lat))}:null};
   }
   await pool.query('select 1');
   const condition=prefecture?' and prefecture=$1':'';
@@ -396,5 +404,5 @@ export async function health(prefecture='') {
   const brands=Object.fromEntries(['FAMILY_MART','LAWSON','SEVEN_ELEVEN'].map(family=>[family,stores.rows.find(row=>row.brand_family===family)?.count??0]));
   const lawsonVariants=emptyLawsonVariantCounts();
   for(const row of lawsonNames.rows)addLawsonVariantCount(lawsonVariants,String(row.canonical_name),Number(row.count));
-  return {ok:true,mode:'database',db:'connected',...result.rows[0],store_count:stores.rows.reduce((sum,row)=>sum+row.count,0),brands,lawson_variants:lawsonVariants,lawson_official_count:lawsonOfficialBenchmark.count,lawson_official_as_of:lawsonOfficialBenchmark.as_of,lawson_official_source:lawsonOfficialBenchmark.source,scope_prefecture:prefecture,extent:bounds?.rows[0]?.west==null?null:bounds.rows[0]};
+  return {ok:true,mode:'database',db:'connected',...result.rows[0],store_count:stores.rows.reduce((sum,row)=>sum+row.count,0),brands,official_brand_counts:officialBrandCounts,official_brand_as_of:officialBrandAsOf,official_brand_sources:officialBrandSources,lawson_variants:lawsonVariants,lawson_official_count:lawsonOfficialBenchmark.count,lawson_official_as_of:lawsonOfficialBenchmark.as_of,lawson_official_source:lawsonOfficialBenchmark.source,scope_prefecture:prefecture,extent:bounds?.rows[0]?.west==null?null:bounds.rows[0]};
 }
