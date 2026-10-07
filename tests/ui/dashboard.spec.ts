@@ -58,9 +58,9 @@ test('filters keep list and map aligned and detail uses last observation', async
 
 test('store map shows collected locations and a visible release version', async ({page})=>{
   await page.goto('/');
-  await expect(page.getByRole('link',{name:'v0.4.9'})).toBeVisible();
+  await expect(page.getByRole('link',{name:'v0.4.10'})).toBeVisible();
   const version=await page.request.get('/api/version');
-  expect((await version.json()).version).toBe('0.4.9');
+  expect((await version.json()).version).toBe('0.4.10');
   const health=await page.request.get('/api/health?prefecture=%E7%A5%9E%E5%A5%88%E5%B7%9D%E7%9C%8C');
   const benchmarks=(await health.json()).official_brand_references;
   expect(benchmarks.FAMILY_MART.count).toBe(1009);

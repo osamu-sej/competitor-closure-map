@@ -332,17 +332,45 @@ export async function getHistory(id:string) {
   return rows.rows;
 }
 const sheetHealthCache=new Map<string,{expiresAt:number;value:Record<string,unknown>}>();
-async function sheetExtent(prefecture:string):Promise<{west:number;south:number;east:number;north:number}|null> {
-  if(!prefecture)return {west:122,south:20,east:154.5,north:46.1};
-  const latitudes:number[]=[],longitudes:number[]=[];
-  await forEachSheetRow('Stores','I',row=>{
-    if(String(row[4]??'')!==prefecture||String(row[8]??'PRESENT')!=='PRESENT')return;
-    const lat=Number(row[6]),lng=Number(row[7]);if(Number.isFinite(lat)&&Number.isFinite(lng)){latitudes.push(lat);longitudes.push(lng);}
-  });
-  if(!latitudes.length)return null;
-  latitudes.sort((a,b)=>a-b);longitudes.sort((a,b)=>a-b);
-  const low=Math.floor((latitudes.length-1)*0.01),high=Math.ceil((latitudes.length-1)*0.99);
-  return {west:longitudes[low],south:latitudes[low],east:longitudes[high],north:latitudes[high]};
+type SheetStoreMetrics={lawsonVariants:Record<string,number>;lawsonVariantsByPrefecture:Map<string,Record<string,number>>;extentByPrefecture:Map<string,{west:number;south:number;east:number;north:number}|null>};
+let sheetStoreMetricsCache:{expiresAt:number;value:SheetStoreMetrics}|undefined;
+let sheetStoreMetricsRequest:Promise<SheetStoreMetrics>|undefined;
+async function sheetStoreMetrics():Promise<SheetStoreMetrics> {
+  if(sheetStoreMetricsCache&&sheetStoreMetricsCache.expiresAt>Date.now())return sheetStoreMetricsCache.value;
+  if(sheetStoreMetricsRequest)return sheetStoreMetricsRequest;
+  sheetStoreMetricsRequest=(async()=>{
+    const lawsonVariants=emptyLawsonVariantCounts();
+    const lawsonVariantsByPrefecture=new Map<string,Record<string,number>>();
+    const positions=new Map<string,{latitudes:number[];longitudes:number[]}>();
+    await forEachSheetRow('Stores','I',row=>{
+      if(String(row[8]??'PRESENT')!=='PRESENT')return;
+      const prefecture=String(row[4]??'');
+      const lat=Number(row[6]),lng=Number(row[7]);
+      if(prefecture&&Number.isFinite(lat)&&Number.isFinite(lng)){
+        const group=positions.get(prefecture)??{latitudes:[],longitudes:[]};
+        group.latitudes.push(lat);group.longitudes.push(lng);positions.set(prefecture,group);
+      }
+      if(String(row[1]??'')==='LAWSON'){
+        const name=String(row[2]??'');
+        addLawsonVariantCount(lawsonVariants,name);
+        if(prefecture){
+          const counts=lawsonVariantsByPrefecture.get(prefecture)??emptyLawsonVariantCounts();
+          addLawsonVariantCount(counts,name);lawsonVariantsByPrefecture.set(prefecture,counts);
+        }
+      }
+    });
+    const extentByPrefecture=new Map<string,{west:number;south:number;east:number;north:number}|null>();
+    for(const [prefecture,group] of positions){
+      group.latitudes.sort((a,b)=>a-b);group.longitudes.sort((a,b)=>a-b);
+      const low=Math.floor((group.latitudes.length-1)*0.01),high=Math.ceil((group.latitudes.length-1)*0.99);
+      extentByPrefecture.set(prefecture,{west:group.longitudes[low],south:group.latitudes[low],east:group.longitudes[high],north:group.latitudes[high]});
+    }
+    return {lawsonVariants,lawsonVariantsByPrefecture,extentByPrefecture};
+  })().then(value=>{
+    sheetStoreMetricsCache={value,expiresAt:Date.now()+300000};
+    return value;
+  }).finally(()=>{sheetStoreMetricsRequest=undefined;});
+  return sheetStoreMetricsRequest;
 }
 async function sheetsHealth(prefecture:string):Promise<Record<string,unknown>> {
   const cached=sheetHealthCache.get(prefecture);if(cached&&cached.expiresAt>Date.now())return cached.value;
@@ -353,22 +381,15 @@ async function sheetsHealth(prefecture:string):Promise<Record<string,unknown>> {
   const families=['FAMILY_MART','LAWSON','SEVEN_ELEVEN'];
   const brands=Object.fromEntries(families.map(family=>[family,latest.reduce((sum,run)=>sum+Number((run.metadata.families as Record<string,unknown>|undefined)?.[family]??0),0)]));
   const storeCount=latest.reduce((sum,run)=>sum+run.store_count,0);
-  const [extent,lawsonVariants]=await Promise.all([sheetExtent(prefecture),sheetLawsonVariantCounts(prefecture)]);
+  const metrics=await sheetStoreMetrics();
+  const extent=prefecture?metrics.extentByPrefecture.get(prefecture)??null:{west:122,south:20,east:154.5,north:46.1};
+  const lawsonVariants=prefecture?metrics.lawsonVariantsByPrefecture.get(prefecture)??emptyLawsonVariantCounts():metrics.lawsonVariants;
   const value={ok:true,mode:'sheets',db:'connected',first_snapshot:runs.length?runs.reduce((old,run)=>run.started_at&&run.started_at<old?run.started_at:old,runs[0].started_at):null,
     latest_snapshot:runs.length?runs.reduce((latest,run)=>run.finished_at>latest?run.finished_at:latest,runs[0].finished_at):null,
     snapshot_day_count:new Set(runs.map(run=>observationDay(run.finished_at))).size,snapshot_count:runs.length,
     prefecture_count:new Set(runs.map(run=>run.prefecture).filter(Boolean)).size,store_count:storeCount,brands,official_brand_counts:officialBrandCounts,official_brand_references:officialBrandReferences(prefecture),official_brand_sources:officialBrandSources,lawson_variants:lawsonVariants,lawson_official_count:lawsonOfficialBenchmark.count,lawson_official_as_of:lawsonOfficialBenchmark.as_of,lawson_official_source:lawsonOfficialBenchmark.source,scope_prefecture:prefecture,extent};
   sheetHealthCache.set(prefecture,{value,expiresAt:Date.now()+30000});
   return value;
-}
-async function sheetLawsonVariantCounts(prefecture:string):Promise<Record<string,number>> {
-  const counts=emptyLawsonVariantCounts();
-  await forEachSheetRow('Stores','I',row=>{
-    if(String(row[1]??'')!=='LAWSON'||String(row[8]??'PRESENT')!=='PRESENT')return;
-    if(prefecture&&String(row[4]??'')!==prefecture)return;
-    addLawsonVariantCount(counts,String(row[2]??''));
-  });
-  return counts;
 }
 export async function health(prefecture='') {
   if(sheetMode)return sheetsHealth(prefecture);
