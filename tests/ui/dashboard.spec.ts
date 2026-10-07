@@ -58,9 +58,15 @@ test('filters keep list and map aligned and detail uses last observation', async
 
 test('store map shows collected locations and a visible release version', async ({page})=>{
   await page.goto('/');
-  await expect(page.getByRole('link',{name:'v0.4.8'})).toBeVisible();
+  await expect(page.getByRole('link',{name:'v0.4.9'})).toBeVisible();
   const version=await page.request.get('/api/version');
-  expect((await version.json()).version).toBe('0.4.8');
+  expect((await version.json()).version).toBe('0.4.9');
+  const health=await page.request.get('/api/health?prefecture=%E7%A5%9E%E5%A5%88%E5%B7%9D%E7%9C%8C');
+  const benchmarks=(await health.json()).official_brand_references;
+  expect(benchmarks.FAMILY_MART.count).toBe(1009);
+  expect(benchmarks.LAWSON.count).toBe(1067);
+  expect(benchmarks.LAWSON.as_of).toBe('2026-02-28');
+  expect(benchmarks.SEVEN_ELEVEN.count).toBe(1540);
   await page.getByRole('button',{name:'収録店舗マップ'}).click();
   await expect(page.getByRole('heading',{name:/収録店舗一覧/})).toContainText('2 件');
   await expect(page.locator('.store-result')).toHaveCount(2);
