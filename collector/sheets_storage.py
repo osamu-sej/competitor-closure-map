@@ -26,7 +26,7 @@ _WRITE_CHUNK_ROWS = 5000
 HEADERS = {
     "Stores": ["store_id", "brand_family", "store_name", "address", "prefecture", "municipality", "latitude", "longitude", "presence", "missing_count", "first_seen_at", "last_seen_at", "last_snapshot_key", "source", "source_store_id", "updated_at", "last_observation_id", "last_observed_at", "source_category", "source_business_type", "licenses_json", "attributions_json"],
     "Changes": ["change_id", "store_id", "observed_at", "change_type", "brand_family", "store_name", "address", "prefecture", "municipality", "latitude", "longitude", "source", "source_store_id", "snapshot_key"],
-    "ClosureEvents": ["event_id", "store_id", "detected_at", "last_seen_at", "status", "closure_date", "reason", "confidence", "nearest_seven_store_id", "nearest_seven_name", "distance_m", "within_100m", "last_observation_id", "created_at", "updated_at"],
+    "ClosureEvents": ["event_id", "store_id", "detected_at", "last_seen_at", "status", "closure_date", "reason", "confidence", "nearest_seven_store_id", "nearest_seven_name", "distance_m", "within_100m", "last_observation_id", "created_at", "updated_at", "notified_status", "notified_at"],
     "Evidence": ["evidence_id", "event_id", "evidence_type", "title", "source_ref", "evidence_date", "summary", "supports_closure", "created_at"],
     "SnapshotRuns": ["snapshot_key", "source", "prefecture", "started_at", "finished_at", "status", "store_count", "metadata_json", "error_message"],
 }
@@ -165,11 +165,11 @@ def load_state() -> dict:
         store_id = str(_value(row, 1, ""))
         store = stores_by_id.get(store_id, {})
         state.setdefault("changes", []).append({"id": str(_value(row, 0, "")), "store_id": store_id, "observed_at": str(_value(row, 2, "")), "change_type": str(_value(row, 3, "")), "brand_family": str(_value(row, 4, store.get("brand_family", ""))), "observed_name": str(_value(row, 5, store.get("canonical_name", ""))), "observed_address": str(_value(row, 6, store.get("address", ""))), "prefecture": str(_value(row, 7, store.get("prefecture", ""))), "city": str(_value(row, 8, store.get("city", ""))), "lat": _number(_value(row, 9)), "lng": _number(_value(row, 10)), "source": str(_value(row, 11, store.get("source", "openpoi"))), "source_store_id": _value(row, 12), "snapshot_key": str(_value(row, 13, ""))})
-    for row in rows["ClosureEvents"]:
+    for row_number, row in enumerate(rows["ClosureEvents"], start=2):
         event_id = str(_value(row, 0, ""))
         if not event_id:
             continue
-        state["events"].append({"id": event_id, "store_id": str(_value(row, 1, "")), "detected_at": str(_value(row, 2, "")), "last_seen_at": str(_value(row, 3, "")), "status": str(_value(row, 4, "MISSING")), "closure_date": _value(row, 5), "reason": _value(row, 6), "confidence": str(_value(row, 7, "LOW")), "nearest_seven_store_id": _value(row, 8), "nearest_seven_name": _value(row, 9), "distance_m": _number(_value(row, 10)), "within_100m": _bool(_value(row, 11, False)), "last_observation_id": str(_value(row, 12, "")), "created_at": str(_value(row, 13, "")), "updated_at": str(_value(row, 14, ""))})
+        state["events"].append({"id": event_id, "store_id": str(_value(row, 1, "")), "detected_at": str(_value(row, 2, "")), "last_seen_at": str(_value(row, 3, "")), "status": str(_value(row, 4, "MISSING")), "closure_date": _value(row, 5), "reason": _value(row, 6), "confidence": str(_value(row, 7, "LOW")), "nearest_seven_store_id": _value(row, 8), "nearest_seven_name": _value(row, 9), "distance_m": _number(_value(row, 10)), "within_100m": _bool(_value(row, 11, False)), "last_observation_id": str(_value(row, 12, "")), "created_at": str(_value(row, 13, "")), "updated_at": str(_value(row, 14, "")), "notified_status": str(_value(row, 15, "")), "notified_at": _value(row, 16), "_sheet_row_number": row_number})
     for row in rows["Evidence"]:
         evidence_id = str(_value(row, 0, ""))
         if evidence_id:
@@ -192,7 +192,7 @@ def _rows(name: str, objects: list[dict]) -> list[list[Any]]:
     keys = {
         "Stores": ["id", "brand_family", "canonical_name", "address", "prefecture", "city", "lat", "lng", "current_presence", "missing_count", "first_seen_at", "last_seen_at", "last_snapshot_key", "source", "source_store_id", "updated_at", "last_observation_id", "last_observed_at", "source_category", "source_business_type", "licenses", "attributions"],
         "Changes": ["id", "store_id", "observed_at", "change_type", "brand_family", "observed_name", "observed_address", "prefecture", "city", "lat", "lng", "source", "source_store_id", "snapshot_key"],
-        "ClosureEvents": ["id", "store_id", "detected_at", "last_seen_at", "status", "closure_date", "reason", "confidence", "nearest_seven_store_id", "nearest_seven_name", "distance_m", "within_100m", "last_observation_id", "created_at", "updated_at"],
+        "ClosureEvents": ["id", "store_id", "detected_at", "last_seen_at", "status", "closure_date", "reason", "confidence", "nearest_seven_store_id", "nearest_seven_name", "distance_m", "within_100m", "last_observation_id", "created_at", "updated_at", "notified_status", "notified_at"],
         "Evidence": ["id", "closure_event_id", "evidence_type", "title", "source_ref", "evidence_date", "summary", "supports_closure", "created_at"],
     }[name]
     return [[_cell(obj.get(key)) for key in keys] for obj in objects]
@@ -301,6 +301,22 @@ def save_state(state: dict) -> None:
     run_rows = [[run.get("snapshot_key", run["id"]), run.get("source", ""), run.get("prefecture", ""), run.get("started_at", ""), run.get("finished_at", ""), run.get("status", ""), run.get("store_count", 0), _cell(run.get("metadata", {})), _cell(run.get("error_message"))] for run in runs]
     for offset in range(0, len(run_rows), _WRITE_CHUNK_ROWS):
         _values_update("SnapshotRuns", offset + 2, run_rows[offset:offset + _WRITE_CHUNK_ROWS])
+
+
+def save_notification_markers(state: dict) -> None:
+    """Persist sent statuses in one targeted batch without rewriting store history."""
+    data = []
+    for event in state.get("events", []):
+        row_number = event.get("_sheet_row_number")
+        if not row_number or not event.get("notified_status") or not event.get("notified_at"):
+            continue
+        data.append({
+            "range": f"'ClosureEvents'!P{int(row_number)}:Q{int(row_number)}",
+            "majorDimension": "ROWS",
+            "values": [[event["notified_status"], event["notified_at"]]],
+        })
+    if data:
+        _request("values:batchUpdate?valueInputOption=RAW", method="POST", body={"valueInputOption": "RAW", "data": data})
 
 
 def record_failure(snapshot_key: str, source: str, prefecture: str, error_message: str) -> None:

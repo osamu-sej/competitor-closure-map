@@ -53,6 +53,11 @@ jobs:
         run: |
           SNAPSHOT_KEY="${MANUAL_SNAPSHOT_KEY:-openpoi-$(date -u +%G-W%V)}"
           python -m collector snapshot --source openpoi --prefecture 全国 --snapshot-key "$SNAPSHOT_KEY"
+      - name: Email new closure signals to Gmail
+        env:
+          GMAIL_SMTP_CREDENTIALS: ${{ secrets.GMAIL_SMTP_CREDENTIALS }}
+          APP_URL: https://competitor-closure-map.onrender.com/
+        run: python -m collector notify
       - name: Create encrypted PostgreSQL backup
         if: env.STORAGE_MODE == 'database'
         run: |

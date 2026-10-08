@@ -22,6 +22,37 @@ class FakeResponse:
 
 
 class SheetsStorageTests(unittest.TestCase):
+    def test_closure_notification_markers_round_trip_and_write_only_marker_columns(self):
+        event = {
+            "id": "event-1", "store_id": "store-1", "detected_at": "2026-10-06T00:00:00Z",
+            "last_seen_at": "2026-10-01T00:00:00Z", "status": "CLOSED_SUSPECTED",
+            "closure_date": None, "reason": None, "confidence": "LOW",
+            "nearest_seven_store_id": "seven-1", "nearest_seven_name": "セブン-イレブン 横浜店",
+            "distance_m": 45, "within_100m": True, "last_observation_id": "observation-1",
+            "created_at": "2026-10-06T00:00:00Z", "updated_at": "2026-10-06T00:00:00Z",
+            "notified_status": "CLOSED_SUSPECTED", "notified_at": "2026-10-09T00:00:00Z",
+        }
+        row = sheets_storage._rows("ClosureEvents", [event])[0]
+        empty = {name: [] for name in sheets_storage.HEADERS}
+        empty["ClosureEvents"] = [row]
+        with patch.object(sheets_storage, "_read_ranges", return_value=empty):
+            restored = sheets_storage.load_state()
+
+        self.assertEqual(len(sheets_storage.HEADERS["ClosureEvents"]), 17)
+        self.assertEqual(restored["events"][0]["notified_status"], "CLOSED_SUSPECTED")
+        self.assertEqual(restored["events"][0]["notified_at"], "2026-10-09T00:00:00Z")
+        self.assertEqual(restored["events"][0]["_sheet_row_number"], 2)
+
+        with patch.object(sheets_storage, "_request") as request:
+            sheets_storage.save_notification_markers(restored)
+
+        request.assert_called_once()
+        args, kwargs = request.call_args
+        self.assertEqual(args[0], "values:batchUpdate?valueInputOption=RAW")
+        self.assertEqual(kwargs["method"], "POST")
+        self.assertEqual(kwargs["body"]["data"][0]["range"], "'ClosureEvents'!P2:Q2")
+        self.assertEqual(kwargs["body"]["data"][0]["values"], [["CLOSED_SUSPECTED", "2026-10-09T00:00:00Z"]])
+
     def test_lawson_source_metadata_round_trips_in_store_sheet(self):
         store = {
             "id": "lawson-1", "brand_family": "LAWSON", "canonical_name": "ローソン 横浜店",

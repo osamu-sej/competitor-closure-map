@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from .engine import add_evidence, add_event_evidence, apply_snapshot, new_state, promotion_status, within_distance
+from .engine import add_evidence, add_event_evidence, apply_snapshot, new_state, promotion_status, utc_now, within_distance
 from .matching import distance_m
 from .sources.csv_source import CsvSource
 from .sources.fixture import FixtureSource
@@ -220,6 +220,7 @@ def main() -> None:
     status_parser.add_argument("--event-id", required=True)
     status_parser.add_argument("--status", choices=("MISSING","CLOSED_SUSPECTED","RELOCATED","TEMPORARY_CLOSED","RENAMED","DATA_ISSUE"), required=True)
     status_parser.add_argument("--reason", required=True)
+    sub.add_parser("notify", help="Email newly detected closure signals to the configured Gmail account")
     args = parser.parse_args()
     if args.command == "build-fixture":
         state = build_fixture()
@@ -234,6 +235,32 @@ def main() -> None:
     storage_mode = os.getenv("STORAGE_MODE", "database")
     if storage_mode not in ("database", "sheets"):
         parser.error("STORAGE_MODE must be database or sheets")
+    if args.command == "notify":
+        if storage_mode != "sheets":
+            parser.error("notify requires STORAGE_MODE=sheets so notification deduplication can be saved")
+        if not os.getenv("GMAIL_SMTP_CREDENTIALS"):
+            print("::warning::Gmail notifications are not configured. Add the GMAIL_SMTP_CREDENTIALS repository secret.")
+            print(json.dumps({"status": "notifications_not_configured"}))
+            return
+        from . import sheets_storage
+        from .notifications import pending_notifications, send_gmail_notifications
+        state = sheets_storage.load_state()
+        pending = pending_notifications(state)
+        if not pending:
+            print(json.dumps({"status": "no_new_signals", "notified": 0}, ensure_ascii=False))
+            return
+        send_gmail_notifications(
+            pending,
+            os.environ["GMAIL_SMTP_CREDENTIALS"],
+            app_url=os.getenv("APP_URL", "https://competitor-closure-map.onrender.com/"),
+        )
+        notified_at = utc_now()
+        for event, _store in pending:
+            event["notified_status"] = event["status"]
+            event["notified_at"] = notified_at
+        sheets_storage.save_notification_markers(state)
+        print(json.dumps({"status": "sent", "notified": len(pending)}, ensure_ascii=False))
+        return
     if args.command == "recover-sheets-snapshot":
         if storage_mode != "sheets":
             parser.error("recover-sheets-snapshot requires STORAGE_MODE=sheets")
@@ -257,7 +284,6 @@ def main() -> None:
     if storage_mode == "database" and args.command not in ("migrate", "migrate-to-sheets") and not os.getenv("DATABASE_URL"):
         parser.error("DATABASE_URL is required; use build-fixture for offline demo")
     from .db import connect, load_state, save_state
-    from .engine import utc_now
     if args.command == "migrate":
         with connect(os.environ["DATABASE_URL"]) as connection:
             with connection.cursor() as cursor:
